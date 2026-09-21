@@ -4,6 +4,12 @@ import dotenv from "dotenv";
 import cors from "cors";
 
 import authRoutes from "./routes/authRoutes.js";
+import expenseRoutes from "./routes/expenseRoutes.js";
+import salaryRoutes from "./routes/salaryRoutes.js";
+import dashboardRoutes from "./routes/dashboardRoutes.js";
+import receiptRoutes from "./routes/receiptRoutes.js";
+import analyticsRoutes from "./routes/analyticsRoutes.js";
+import budgetRoutes from "./routes/budgetRoutes.js";
 
 dotenv.config();
 
@@ -13,6 +19,12 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/api/auth", authRoutes);
+app.use("/api/expenses", expenseRoutes);
+app.use("/api/salary", salaryRoutes);
+app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/receipt", receiptRoutes);
+app.use("/api/analytics",analyticsRoutes);
+app.use("/api/budget", budgetRoutes);
 
 const PORT = process.env.PORT || 5000;
 

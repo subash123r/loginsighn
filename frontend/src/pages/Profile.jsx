@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import { getProfile } from "../services/authService";
 import { useNavigate } from "react-router-dom";
@@ -44,10 +45,19 @@ function Profile() {
           </p>
         </div>
 
-        <button onClick={logout}>Logout</button>
+        {/* Dashboard Button */}
+        <button onClick={() => navigate("/dashboard")}>
+          Go to Dashboard
+        </button>
+
+        {/* Logout Button */}
+        <button onClick={logout}>
+          Logout
+        </button>
       </div>
     </div>
   );
 }
 
 export default Profile;
+
