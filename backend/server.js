@@ -10,6 +10,7 @@ import dashboardRoutes from "./routes/dashboardRoutes.js";
 import receiptRoutes from "./routes/receiptRoutes.js";
 import analyticsRoutes from "./routes/analyticsRoutes.js";
 import budgetRoutes from "./routes/budgetRoutes.js";
+import reportRoutes from "./routes/reportRoutes.js";
 
 dotenv.config();
 
@@ -25,6 +26,8 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/receipt", receiptRoutes);
 app.use("/api/analytics",analyticsRoutes);
 app.use("/api/budget", budgetRoutes);
+app.use("/api/report", reportRoutes); 
+
 
 const PORT = process.env.PORT || 5000;
 

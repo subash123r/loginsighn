@@ -5,14 +5,12 @@ import {
   TrendingDown,
   CreditCard,
   Receipt,
-  Upload,
   Plus,
   ScanLine,
   Trash2,
   Save,
   CalendarDays,
   Store,
-  ChevronDown,
   Pencil,
   Search,
 } from "lucide-react";
@@ -48,11 +46,13 @@ import {
   saveBudget,
 } from "../services/budgetService";
 
-import "./Dashboard.css";
+import {
+  getMonthlyReport,
+} from "../services/reportService";
 
-// ======================================================
-// CONSTANTS
-// ======================================================
+/* =====================================================
+   CONSTANTS
+===================================================== */
 
 const categories = [
   "Food",
@@ -105,52 +105,48 @@ const chartColors = [
   "#607d8b",
 ];
 
-// ======================================================
-// HELPERS
-// ======================================================
+/* =====================================================
+   HELPERS
+===================================================== */
 
 const getToday = () => {
   const date = new Date();
 
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
+  return `${date.getFullYear()}-${String(
+    date.getMonth() + 1
+  ).padStart(2, "0")}-${String(date.getDate()).padStart(
+    2,
+    "0"
+  )}`;
 };
 
 const getCurrentMonth = () => {
   const date = new Date();
 
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-
-  return `${year}-${month}`;
+  return `${date.getFullYear()}-${String(
+    date.getMonth() + 1
+  ).padStart(2, "0")}`;
 };
 
-const normalizeDate = (date) => {
-  if (!date) return "";
+const normalizeDate = (value) => {
+  if (!value) return "";
 
   try {
-    return new Date(date).toISOString().split("T")[0];
+    return new Date(value)
+      .toISOString()
+      .split("T")[0];
   } catch {
     return "";
   }
 };
 
 const formatCurrency = (value) => {
-  const amount = Number(value || 0);
-
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
     maximumFractionDigits: 2,
-  }).format(amount);
+  }).format(Number(value || 0));
 };
-
-// ======================================================
-// BREAKDOWN NORMALIZER
-// ======================================================
 
 const normalizeBreakdown = (data) => {
   if (Array.isArray(data)) {
@@ -161,7 +157,6 @@ const normalizeBreakdown = (data) => {
           item?.category ||
           item?.paymentMethod ||
           "Other",
-
         value: Number(
           item?.value ??
             item?.amount ??
@@ -169,18 +164,13 @@ const normalizeBreakdown = (data) => {
             0
         ),
       }))
-      .filter(
-        (item) =>
-          Number.isFinite(item.value) &&
-          item.value > 0
-      );
+      .filter((item) => item.value > 0);
   }
 
   if (data && typeof data === "object") {
     return Object.entries(data)
       .map(([name, value]) => ({
         name,
-
         value: Number(
           value?.value ??
             value?.amount ??
@@ -189,168 +179,96 @@ const normalizeBreakdown = (data) => {
             0
         ),
       }))
-      .filter(
-        (item) =>
-          Number.isFinite(item.value) &&
-          item.value > 0
-      );
+      .filter((item) => item.value > 0);
   }
 
   return [];
 };
 
-// ======================================================
-// OCR HELPERS
-// ======================================================
-
 const parseOCRAmount = (value) => {
-  if (value === undefined || value === null) return 0;
-
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : 0;
+  if (
+    value === null ||
+    value === undefined ||
+    value === ""
+  ) {
+    return "";
   }
 
-  const cleaned = String(value)
-    .replace(/₹/gi, "")
+  const text = String(value)
+    .replace(/₹/g, "")
     .replace(/rs\.?/gi, "")
     .replace(/inr/gi, "")
     .replace(/,/g, "")
-    .replace(/[^\d.]/g, "")
     .trim();
 
-  const amount = Number(cleaned);
+  const matches = text.match(
+    /\d+(?:\.\d{1,2})?/g
+  );
 
-  return Number.isFinite(amount) ? amount : 0;
+  if (!matches) return "";
+
+  const numbers = matches
+    .map(Number)
+    .filter(Number.isFinite);
+
+  if (!numbers.length) return "";
+
+  return Math.max(...numbers).toString();
 };
 
 const extractAmountFromOCRText = (text) => {
-  if (!text) return 0;
+  if (!text) return "";
 
-  const raw = String(text);
-
-  const lines = raw
+  const lines = String(text)
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const priorityPatterns = [
-    /grand\s*total[^\d₹]*₹?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /net\s*total[^\d₹]*₹?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /amount\s*payable[^\d₹]*₹?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /total\s*amount[^\d₹]*₹?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /bill\s*total[^\d₹]*₹?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /total[^\d₹]*₹?\s*([\d,]+(?:\.\d{1,2})?)/i,
+  const patterns = [
+    /grand\s*total[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+    /total\s*amount[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+    /amount\s*payable[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+    /net\s*amount[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+    /payable[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
+    /^total[^\d]*([\d,]+(?:\.\d{1,2})?)/i,
   ];
 
-  for (const pattern of priorityPatterns) {
-    const match = raw.match(pattern);
-
-    if (match?.[1]) {
-      const amount = parseOCRAmount(match[1]);
-
-      if (amount > 0) {
-        return amount;
-      }
-    }
-  }
-
   for (const line of lines) {
-    if (/total|payable|amount/i.test(line)) {
-      const numbers = line.match(
-        /₹?\s*[\d,]+(?:\.\d{1,2})?/g
-      );
+    for (const pattern of patterns) {
+      const match = line.match(pattern);
 
-      if (numbers?.length) {
-        const values = numbers
-          .map(parseOCRAmount)
-          .filter((value) => value > 0);
+      if (match?.[1]) {
+        const amount = parseOCRAmount(match[1]);
 
-        if (values.length) {
-          return values[values.length - 1];
-        }
+        if (amount) return amount;
       }
     }
   }
 
-  return 0;
+  return "";
 };
 
 const getRawOCRText = (response) => {
   return (
     response?.rawText ||
-    response?.data?.rawText ||
-    response?.ocrText ||
-    response?.data?.ocrText ||
     response?.text ||
+    response?.ocrText ||
+    response?.data?.rawText ||
     response?.data?.text ||
+    response?.data?.ocrText ||
     ""
   );
 };
 
-// ======================================================
-// CATEGORY DROPDOWN
-// ======================================================
-
-const CategoryDropdown = ({
-  value,
-  onChange,
-  open,
-  setOpen,
-}) => {
-  return (
-    <div className="position-relative">
-      <button
-        type="button"
-        className="form-control text-start d-flex justify-content-between align-items-center"
-        onClick={() => setOpen(!open)}
-      >
-        <span>{value || "Select Category"}</span>
-
-        <ChevronDown size={18} />
-      </button>
-
-      {open && (
-        <div
-          className="position-absolute bg-white border rounded shadow-sm w-100"
-          style={{
-            zIndex: 1000,
-            top: "100%",
-            left: 0,
-          }}
-        >
-          {categories.map((category) => (
-            <button
-              type="button"
-              key={category}
-              className="dropdown-item"
-              onClick={() => {
-                onChange(category);
-                setOpen(false);
-              }}
-            >
-              {category}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// ======================================================
-// DASHBOARD
-// ======================================================
+/* =====================================================
+   MAIN COMPONENT
+===================================================== */
 
 const Dashboard = () => {
-  // ====================================================
-  // MAIN STATES
-  // ====================================================
-
   const [selectedMonth, setSelectedMonth] =
     useState(getCurrentMonth());
 
   const [salary, setSalary] = useState("");
-
   const [savingSalary, setSavingSalary] =
     useState(false);
 
@@ -369,23 +287,24 @@ const Dashboard = () => {
 
   const [loading, setLoading] = useState(false);
 
-  // ====================================================
-  // MANUAL EXPENSE
-  // ====================================================
+  /* =====================================================
+     MANUAL EXPENSE
+  ===================================================== */
 
-  const [manualExpense, setManualExpense] = useState({
-    date: getToday(),
-    itemName: "",
-    amount: "",
-    quantity: 1,
-    vendor: "",
-    category: "Food",
-    paymentMethod: "Other",
-  });
+  const [manualExpense, setManualExpense] =
+    useState({
+      date: getToday(),
+      itemName: "",
+      amount: "",
+      quantity: 1,
+      vendor: "",
+      category: "Food",
+      paymentMethod: "Other",
+    });
 
-  // ====================================================
-  // OCR
-  // ====================================================
+  /* =====================================================
+     OCR
+  ===================================================== */
 
   const [receiptImage, setReceiptImage] =
     useState(null);
@@ -396,9 +315,12 @@ const Dashboard = () => {
   const [scanning, setScanning] =
     useState(false);
 
+  const [showExtracted, setShowExtracted] =
+    useState(false);
+
   const [extractedData, setExtractedData] =
     useState({
-      date: "",
+      date: getToday(),
       itemName: "",
       amount: "",
       quantity: 1,
@@ -407,15 +329,9 @@ const Dashboard = () => {
       paymentMethod: "Other",
     });
 
-  const [showExtracted, setShowExtracted] =
-    useState(false);
-
-  const [categoryOpen, setCategoryOpen] =
-    useState(false);
-
-  // ====================================================
-  // EDIT EXPENSE
-  // ====================================================
+  /* =====================================================
+     EDIT
+  ===================================================== */
 
   const [editingExpense, setEditingExpense] =
     useState(null);
@@ -431,9 +347,9 @@ const Dashboard = () => {
       paymentMethod: "Other",
     });
 
-  // ====================================================
-  // SEARCH / FILTER
-  // ====================================================
+  /* =====================================================
+     SEARCH
+  ===================================================== */
 
   const [searchTerm, setSearchTerm] =
     useState("");
@@ -441,9 +357,9 @@ const Dashboard = () => {
   const [filterCategory, setFilterCategory] =
     useState("All");
 
-  // ====================================================
-  // BUDGET
-  // ====================================================
+  /* =====================================================
+     BUDGET
+  ===================================================== */
 
   const [budget, setBudget] = useState({
     totalBudget: "",
@@ -468,71 +384,100 @@ const Dashboard = () => {
       exceeded: false,
     });
 
-  const [categoryBudgetSummary, setCategoryBudgetSummary] =
-    useState({});
-
   const [savingBudget, setSavingBudget] =
     useState(false);
 
   const [showBudgetForm, setShowBudgetForm] =
     useState(false);
 
-  // ====================================================
-  // LOAD DASHBOARD
-  // ====================================================
+  /* =====================================================
+     MONTHLY REPORT
+  ===================================================== */
+
+  const [monthlyReport, setMonthlyReport] =
+    useState(null);
+
+  const [reportLoading, setReportLoading] =
+    useState(false);
+
+  /* =====================================================
+     LOAD DASHBOARD
+  ===================================================== */
 
   const loadDashboard = async () => {
     try {
-      setLoading(true);
-
       const response =
         await getDashboard(selectedMonth);
 
       const data =
+        response?.dashboard ||
+        response?.data?.dashboard ||
         response?.data ||
         response ||
         {};
 
-      setDashboard({
-        salary: Number(data.salary || 0),
+      const recentExpenses =
+        Array.isArray(data.recentExpenses)
+          ? data.recentExpenses
+          : Array.isArray(data.expenses)
+          ? data.expenses
+          : [];
 
-        totalExpenses: Number(
-          data.totalExpenses || 0
-        ),
+      const salaryValue = Number(
+        data.salary ?? 0
+      );
 
-        remaining: Number(
-          data.remaining ??
-            data.remainingBalance ??
-            0
-        ),
+      const totalExpenses = Number(
+        data.totalExpenses ??
+          data.totalExpense ??
+          data.expensesTotal ??
+          data.totalSpent ??
+          0
+      );
 
-        percentageSpent: Number(
-          data.percentageSpent || 0
-        ),
+      /*
+        IMPORTANT:
+        Always calculate balance here.
+        Do not depend on backend "remaining"
+        because this prevents the ₹0 bug.
+      */
+      const remaining =
+        salaryValue - totalExpenses;
+
+      const percentageSpent =
+        salaryValue > 0
+          ? (totalExpenses / salaryValue) * 100
+          : 0;
+
+      const dashboardData = {
+        salary: salaryValue,
+
+        totalExpenses,
+
+        remaining,
+
+        percentageSpent,
 
         expenseCount: Number(
-          data.expenseCount || 0
+          data.expenseCount ??
+            recentExpenses.length ??
+            0
         ),
 
         highestExpense:
           data.highestExpense || null,
 
-        // IMPORTANT FIX
         categoryBreakdown:
           normalizeBreakdown(
             data.categoryBreakdown
           ),
 
-        // IMPORTANT FIX
         paymentMethodBreakdown:
           normalizeBreakdown(
             data.paymentMethodBreakdown
           ),
 
-        recentExpenses:
-          Array.isArray(data.recentExpenses)
-            ? data.recentExpenses
-            : [],
+        recentExpenses,
 
         dailyExpenseTrend:
           Array.isArray(
@@ -540,129 +485,173 @@ const Dashboard = () => {
           )
             ? data.dailyExpenseTrend
             : [],
-      });
+      };
+
+      setDashboard(dashboardData);
 
       setSalary(
         data.salary !== undefined
           ? data.salary
           : ""
       );
+
+      return dashboardData;
     } catch (error) {
       console.error(
-        "Dashboard loading error:",
+        "Dashboard Error:",
         error
       );
-    } finally {
-      setLoading(false);
+
+      return null;
     }
   };
 
-  // ====================================================
-  // LOAD BUDGET
-  // ====================================================
+  /* =====================================================
+     LOAD BUDGET
+  ===================================================== */
 
-  const loadBudget = async () => {
+  const loadBudget = async (
+    expenseTotal = null
+  ) => {
     try {
       const response =
         await getBudget(selectedMonth);
 
       const data =
+        response?.budget ||
+        response?.data?.budget ||
         response?.data ||
         response ||
         {};
 
-      if (data.budget) {
-        setBudget({
-          totalBudget:
-            data.budget.totalBudget || "",
-
-          categoryBudgets: {
-            Food:
-              data.budget.categoryBudgets?.Food ||
-              "",
-
-            Travel:
-              data.budget.categoryBudgets?.Travel ||
-              "",
-
-            Shopping:
-              data.budget.categoryBudgets?.Shopping ||
-              "",
-
-            Bills:
-              data.budget.categoryBudgets?.Bills ||
-              "",
-
-            Health:
-              data.budget.categoryBudgets?.Health ||
-              "",
-
-            Entertainment:
-              data.budget.categoryBudgets
-                ?.Entertainment || "",
-
-            Education:
-              data.budget.categoryBudgets
-                ?.Education || "",
-
-            Other:
-              data.budget.categoryBudgets?.Other ||
-              "",
-          },
-        });
-      } else {
-        setBudget({
-          totalBudget: "",
-          categoryBudgets: {
-            Food: "",
-            Travel: "",
-            Shopping: "",
-            Bills: "",
-            Health: "",
-            Entertainment: "",
-            Education: "",
-            Other: "",
-          },
-        });
-      }
-
-      setBudgetSummary(
-        data.summary || {
-          totalBudget: 0,
-          totalSpent: 0,
-          remaining: 0,
-          percentage: 0,
-          exceeded: false,
-        }
+      const totalBudget = Number(
+        data.totalBudget ?? 0
       );
 
-      setCategoryBudgetSummary(
-        data.categorySummary || {}
-      );
+      const totalSpent =
+        expenseTotal !== null
+          ? Number(expenseTotal)
+          : Number(data.totalSpent ?? 0);
+
+      const remaining =
+        totalBudget - totalSpent;
+
+      const percentage =
+        totalBudget > 0
+          ? (totalSpent / totalBudget) * 100
+          : 0;
+
+      setBudget({
+        totalBudget:
+          data.totalBudget ?? "",
+
+        categoryBudgets: {
+          Food:
+            data.categoryBudgets?.Food ?? "",
+          Travel:
+            data.categoryBudgets?.Travel ?? "",
+          Shopping:
+            data.categoryBudgets?.Shopping ?? "",
+          Bills:
+            data.categoryBudgets?.Bills ?? "",
+          Health:
+            data.categoryBudgets?.Health ?? "",
+          Entertainment:
+            data.categoryBudgets?.Entertainment ??
+            "",
+          Education:
+            data.categoryBudgets?.Education ??
+            "",
+          Other:
+            data.categoryBudgets?.Other ?? "",
+        },
+      });
+
+      setBudgetSummary({
+        totalBudget,
+        totalSpent,
+        remaining,
+        percentage,
+        exceeded: remaining < 0,
+      });
     } catch (error) {
       console.error(
-        "Budget loading error:",
+        "Budget Error:",
         error
       );
     }
   };
 
-  // ====================================================
-  // MONTH CHANGE
-  // ====================================================
+  /* =====================================================
+     LOAD REPORT
+  ===================================================== */
+
+  const loadMonthlyReport = async () => {
+    try {
+      setReportLoading(true);
+
+      const response =
+        await getMonthlyReport(
+          selectedMonth
+        );
+
+      const data =
+        response?.report ||
+        response?.data?.report ||
+        response?.data ||
+        {};
+
+      setMonthlyReport(data);
+    } catch (error) {
+      console.error(
+        "Report Error:",
+        error
+      );
+
+      setMonthlyReport(null);
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
+  /* =====================================================
+     REFRESH EVERYTHING
+  ===================================================== */
+
+  const refreshAll = async () => {
+    setLoading(true);
+
+    try {
+      const dashboardData =
+        await loadDashboard();
+
+      await loadBudget(
+        dashboardData?.totalExpenses ?? 0
+      );
+
+      await loadMonthlyReport();
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* =====================================================
+     INITIAL LOAD
+  ===================================================== */
 
   useEffect(() => {
-    loadDashboard();
-    loadBudget();
+    refreshAll();
   }, [selectedMonth]);
 
-  // ====================================================
-  // SALARY
-  // ====================================================
+  /* =====================================================
+     SAVE SALARY
+  ===================================================== */
 
   const handleSaveSalary = async () => {
-    if (!salary || Number(salary) <= 0) {
-      alert("Please enter a valid salary");
+    const amount = Number(salary);
+
+    if (amount < 0 || salary === "") {
+      alert("Enter a valid salary");
       return;
     }
 
@@ -671,15 +660,15 @@ const Dashboard = () => {
 
       await saveSalary({
         month: selectedMonth,
-        amount: Number(salary),
+        amount,
       });
 
-      alert("Salary saved successfully");
+      await refreshAll();
 
-      await loadDashboard();
+      alert("Salary saved successfully");
     } catch (error) {
       console.error(
-        "Salary save error:",
+        "Salary Error:",
         error
       );
 
@@ -692,9 +681,9 @@ const Dashboard = () => {
     }
   };
 
-  // ====================================================
-  // MANUAL EXPENSE CHANGE
-  // ====================================================
+  /* =====================================================
+     MANUAL EXPENSE CHANGE
+  ===================================================== */
 
   const handleManualExpenseChange = (e) => {
     const { name, value } = e.target;
@@ -705,22 +694,23 @@ const Dashboard = () => {
     }));
   };
 
-  // ====================================================
-  // CREATE MANUAL EXPENSE
-  // ====================================================
+  /* =====================================================
+     ADD EXPENSE
+  ===================================================== */
 
-  const handleCreateExpense = async (e) => {
+  const handleAddExpense = async (e) => {
     e.preventDefault();
 
+    if (!manualExpense.itemName.trim()) {
+      alert("Enter item name");
+      return;
+    }
+
     if (
-      !manualExpense.itemName.trim() ||
-      !manualExpense.amount ||
+      manualExpense.amount === "" ||
       Number(manualExpense.amount) <= 0
     ) {
-      alert(
-        "Please enter item name and valid amount"
-      );
-
+      alert("Enter valid amount");
       return;
     }
 
@@ -729,23 +719,14 @@ const Dashboard = () => {
 
       await createExpense({
         ...manualExpense,
-
-        month: selectedMonth,
-
         amount: Number(
           manualExpense.amount
         ),
-
         quantity: Number(
           manualExpense.quantity || 1
         ),
-
-        paymentMethod:
-          manualExpense.paymentMethod ||
-          "Other",
+        month: selectedMonth,
       });
-
-      alert("Expense added successfully");
 
       setManualExpense({
         date: getToday(),
@@ -757,26 +738,27 @@ const Dashboard = () => {
         paymentMethod: "Other",
       });
 
-      await loadDashboard();
-      await loadBudget();
+      await refreshAll();
+
+      alert("Expense added successfully");
     } catch (error) {
       console.error(
-        "Create expense error:",
+        "Add Expense Error:",
         error
       );
 
       alert(
         error?.response?.data?.message ||
-          "Failed to create expense"
+          "Failed to add expense"
       );
     } finally {
       setLoading(false);
     }
   };
 
-  // ====================================================
-  // RECEIPT FILE CHANGE
-  // ====================================================
+  /* =====================================================
+     RECEIPT
+  ===================================================== */
 
   const handleReceiptChange = (e) => {
     const file = e.target.files?.[0];
@@ -785,28 +767,23 @@ const Dashboard = () => {
 
     setReceiptImage(file);
 
-    const previewUrl =
-      URL.createObjectURL(file);
-
-    setReceiptPreview(previewUrl);
+    setReceiptPreview(
+      URL.createObjectURL(file)
+    );
   };
 
-  // ====================================================
-  // SCAN RECEIPT
-  // ====================================================
+  /* =====================================================
+     OCR
+  ===================================================== */
 
   const handleScanReceipt = async () => {
     if (!receiptImage) {
-      alert("Please select a receipt image");
+      alert("Select receipt image first");
       return;
     }
 
     try {
       setScanning(true);
-
-      console.log(
-        "========== STARTING OCR =========="
-      );
 
       const response =
         await scanReceipt(receiptImage);
@@ -816,107 +793,74 @@ const Dashboard = () => {
         response
       );
 
-      const data =
+      const rawText =
+        getRawOCRText(response);
+
+      const extracted =
+        response?.extractedData ||
+        response?.data?.extractedData ||
         response?.data ||
         response ||
         {};
 
-      const rawText =
-        getRawOCRText(response);
+      let amount =
+        extracted.amount ||
+        extracted.total ||
+        extracted.totalAmount ||
+        "";
 
-      let detectedAmount =
-        parseOCRAmount(
-          data.amount ??
-            data.extractedData?.amount ??
-            data.result?.amount
-        );
-
-      if (detectedAmount <= 1) {
-        const textAmount =
+      if (!amount && rawText) {
+        amount =
           extractAmountFromOCRText(
             rawText
           );
-
-        if (textAmount > 0) {
-          detectedAmount = textAmount;
-        }
       }
 
-      const detectedDate =
-        data.date ||
-        data.extractedData?.date ||
-        "";
-
-      const detectedItem =
-        data.itemName ||
-        data.extractedData?.itemName ||
-        "";
-
-      const detectedQuantity =
-        Number(
-          data.quantity ||
-            data.extractedData?.quantity ||
-            1
-        );
-
-      const detectedVendor =
-        data.vendor ||
-        data.extractedData?.vendor ||
-        "";
-
-      const detectedCategory =
-        data.category ||
-        data.extractedData?.category ||
-        "Other";
-
-      const detectedPaymentMethod =
-        data.paymentMethod ||
-        data.extractedData
-          ?.paymentMethod ||
-        "Other";
+      amount = parseOCRAmount(amount);
 
       setExtractedData({
         date:
           normalizeDate(
-            detectedDate
+            extracted.date
           ) || getToday(),
 
         itemName:
-          detectedItem ||
+          extracted.itemName ||
+          extracted.item ||
+          extracted.description ||
           "Receipt Expense",
 
-        amount:
-          detectedAmount > 0
-            ? detectedAmount
-            : "",
+        amount,
 
-        quantity:
-          detectedQuantity > 0
-            ? detectedQuantity
-            : 1,
+        quantity: Number(
+          extracted.quantity || 1
+        ),
 
         vendor:
-          detectedVendor,
+          extracted.vendor ||
+          extracted.store ||
+          extracted.shopName ||
+          "",
 
         category:
           categories.includes(
-            detectedCategory
+            extracted.category
           )
-            ? detectedCategory
+            ? extracted.category
             : "Other",
 
         paymentMethod:
           paymentMethods.includes(
-            detectedPaymentMethod
+            extracted.paymentMethod
           )
-            ? detectedPaymentMethod
+            ? extracted.paymentMethod
             : "Other",
       });
 
       setShowExtracted(true);
     } catch (error) {
       console.error(
-        "OCR error:",
+        "OCR Error:",
         error
       );
 
@@ -929,10 +873,6 @@ const Dashboard = () => {
     }
   };
 
-  // ====================================================
-  // OCR CHANGE
-  // ====================================================
-
   const handleExtractedChange = (e) => {
     const { name, value } = e.target;
 
@@ -942,21 +882,22 @@ const Dashboard = () => {
     }));
   };
 
-  // ====================================================
-  // SAVE SCANNED EXPENSE
-  // ====================================================
+  /* =====================================================
+     SAVE OCR EXPENSE
+  ===================================================== */
 
-  const handleSaveScannedExpense =
+  const handleSaveExtractedExpense =
     async () => {
+      if (!extractedData.itemName.trim()) {
+        alert("Enter item name");
+        return;
+      }
+
       if (
-        !extractedData.itemName ||
         !extractedData.amount ||
         Number(extractedData.amount) <= 0
       ) {
-        alert(
-          "Please check item name and amount"
-        );
-
+        alert("Enter valid amount");
         return;
       }
 
@@ -965,38 +906,21 @@ const Dashboard = () => {
 
         await createExpense({
           ...extractedData,
-
-          month: selectedMonth,
-
-          date:
-            extractedData.date ||
-            getToday(),
-
           amount: Number(
             extractedData.amount
           ),
-
           quantity: Number(
             extractedData.quantity || 1
           ),
-
-          category:
-            extractedData.category ||
-            "Other",
-
-          paymentMethod:
-            extractedData.paymentMethod ||
-            "Other",
+          month: selectedMonth,
         });
 
-        alert(
-          "Scanned expense saved successfully"
-        );
-
         setShowExtracted(false);
+        setReceiptImage(null);
+        setReceiptPreview("");
 
         setExtractedData({
-          date: "",
+          date: getToday(),
           itemName: "",
           amount: "",
           quantity: 1,
@@ -1005,168 +929,161 @@ const Dashboard = () => {
           paymentMethod: "Other",
         });
 
-        setReceiptImage(null);
-        setReceiptPreview("");
+        await refreshAll();
 
-        await loadDashboard();
-        await loadBudget();
+        alert(
+          "Receipt expense saved successfully"
+        );
       } catch (error) {
         console.error(
-          "Save scanned expense error:",
+          "OCR Save Error:",
           error
         );
 
         alert(
           error?.response?.data?.message ||
-            "Failed to save scanned expense"
+            "Failed to save expense"
         );
       } finally {
         setLoading(false);
       }
     };
 
-  // ====================================================
-  // DELETE EXPENSE
-  // ====================================================
+  /* =====================================================
+     DELETE
+  ===================================================== */
 
-  const handleDeleteExpense =
-    async (id) => {
-      if (
-        !window.confirm(
-          "Are you sure you want to delete this expense?"
+  const handleDeleteExpense = async (
+    id
+  ) => {
+    if (
+      !window.confirm(
+        "Delete this expense?"
+      )
+    ) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      await deleteExpense(id);
+
+      await refreshAll();
+
+      alert("Expense deleted successfully");
+    } catch (error) {
+      console.error(
+        "Delete Error:",
+        error
+      );
+
+      alert(
+        error?.response?.data?.message ||
+          "Failed to delete expense"
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /* =====================================================
+     EDIT
+  ===================================================== */
+
+  const handleStartEdit = (expense) => {
+    setEditingExpense(expense);
+
+    setEditExpenseData({
+      date:
+        normalizeDate(expense.date) ||
+        getToday(),
+
+      itemName:
+        expense.itemName || "",
+
+      amount:
+        expense.amount ?? "",
+
+      quantity:
+        expense.quantity ?? 1,
+
+      vendor:
+        expense.vendor || "",
+
+      category:
+        categories.includes(
+          expense.category
         )
-      ) {
-        return;
-      }
+          ? expense.category
+          : "Other",
 
-      try {
-        setLoading(true);
+      paymentMethod:
+        paymentMethods.includes(
+          expense.paymentMethod
+        )
+          ? expense.paymentMethod
+          : "Other",
+    });
+  };
 
-        await deleteExpense(id);
+  const handleEditChange = (e) => {
+    const { name, value } = e.target;
 
-        alert(
-          "Expense deleted successfully"
-        );
+    setEditExpenseData((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
 
-        await loadDashboard();
-        await loadBudget();
-      } catch (error) {
-        console.error(
-          "Delete expense error:",
-          error
-        );
+  const handleUpdateExpense = async (e) => {
+    e.preventDefault();
 
-        alert(
-          error?.response?.data?.message ||
-            "Failed to delete expense"
-        );
-      } finally {
-        setLoading(false);
-      }
-    };
+    if (!editingExpense?._id) return;
 
-  // ====================================================
-  // EDIT EXPENSE
-  // ====================================================
+    try {
+      setLoading(true);
 
-  const handleEditExpense =
-    (expense) => {
-      setEditingExpense(expense);
+      await updateExpense(
+        editingExpense._id,
+        {
+          ...editExpenseData,
+          amount: Number(
+            editExpenseData.amount
+          ),
+          quantity: Number(
+            editExpenseData.quantity || 1
+          ),
+          month: selectedMonth,
+        }
+      );
 
-      setEditExpenseData({
-        date:
-          normalizeDate(
-            expense.date
-          ) || getToday(),
+      setEditingExpense(null);
 
-        itemName:
-          expense.itemName || "",
+      await refreshAll();
 
-        amount:
-          expense.amount || "",
+      alert("Expense updated successfully");
+    } catch (error) {
+      console.error(
+        "Update Error:",
+        error
+      );
 
-        quantity:
-          expense.quantity || 1,
+      alert(
+        error?.response?.data?.message ||
+          "Failed to update expense"
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
-        vendor:
-          expense.vendor || "",
-
-        category:
-          expense.category || "Other",
-
-        paymentMethod:
-          paymentMethods.includes(
-            expense.paymentMethod
-          )
-            ? expense.paymentMethod
-            : "Other",
-      });
-    };
-
-  // ====================================================
-  // UPDATE EXPENSE
-  // ====================================================
-
-  const handleUpdateExpense =
-    async () => {
-      if (!editingExpense?._id) {
-        return;
-      }
-
-      try {
-        setLoading(true);
-
-        await updateExpense(
-          editingExpense._id,
-          {
-            ...editExpenseData,
-
-            amount: Number(
-              editExpenseData.amount
-            ),
-
-            quantity: Number(
-              editExpenseData.quantity || 1
-            ),
-
-            paymentMethod:
-              editExpenseData.paymentMethod ||
-              "Other",
-          }
-        );
-
-        alert(
-          "Expense updated successfully"
-        );
-
-        setEditingExpense(null);
-
-        await loadDashboard();
-        await loadBudget();
-      } catch (error) {
-        console.error(
-          "Update expense error:",
-          error
-        );
-
-        alert(
-          error?.response?.data?.message ||
-            "Failed to update expense"
-        );
-      } finally {
-        setLoading(false);
-      }
-    };
-
-  // ====================================================
-  // BUDGET
-  // ====================================================
+  /* =====================================================
+     BUDGET
+  ===================================================== */
 
   const handleBudgetChange = (e) => {
-    const {
-      name,
-      value,
-    } = e.target;
+    const { name, value } = e.target;
 
     setBudget((prev) => ({
       ...prev,
@@ -1180,24 +1097,21 @@ const Dashboard = () => {
   ) => {
     setBudget((prev) => ({
       ...prev,
-
       categoryBudgets: {
         ...prev.categoryBudgets,
-
         [category]: value,
       },
     }));
   };
 
-  const handleSaveBudget = async () => {
-    if (
-      !budget.totalBudget ||
-      Number(budget.totalBudget) <= 0
-    ) {
-      alert(
-        "Please enter a valid monthly budget"
-      );
+  const handleSaveBudget = async (e) => {
+    e.preventDefault();
 
+    if (
+      budget.totalBudget === "" ||
+      Number(budget.totalBudget) < 0
+    ) {
+      alert("Enter valid budget");
       return;
     }
 
@@ -1206,67 +1120,32 @@ const Dashboard = () => {
 
       await saveBudget({
         month: selectedMonth,
-
-        totalBudget:
-          Number(
-            budget.totalBudget
+        totalBudget: Number(
+          budget.totalBudget
+        ),
+        categoryBudgets:
+          Object.fromEntries(
+            categories.map((category) => [
+              category,
+              Number(
+                budget.categoryBudgets[
+                  category
+                ] || 0
+              ),
+            ])
           ),
-
-        categoryBudgets: {
-          Food:
-            Number(
-              budget.categoryBudgets.Food || 0
-            ),
-
-          Travel:
-            Number(
-              budget.categoryBudgets.Travel || 0
-            ),
-
-          Shopping:
-            Number(
-              budget.categoryBudgets.Shopping || 0
-            ),
-
-          Bills:
-            Number(
-              budget.categoryBudgets.Bills || 0
-            ),
-
-          Health:
-            Number(
-              budget.categoryBudgets.Health || 0
-            ),
-
-          Entertainment:
-            Number(
-              budget.categoryBudgets
-                .Entertainment || 0
-            ),
-
-          Education:
-            Number(
-              budget.categoryBudgets
-                .Education || 0
-            ),
-
-          Other:
-            Number(
-              budget.categoryBudgets.Other || 0
-            ),
-        },
       });
 
-      alert(
-        "Budget saved successfully"
+      await loadBudget(
+        dashboard.totalExpenses
       );
 
-      await loadBudget();
-
       setShowBudgetForm(false);
+
+      alert("Budget saved successfully");
     } catch (error) {
       console.error(
-        "Save budget error:",
+        "Budget Save Error:",
         error
       );
 
@@ -1279,66 +1158,60 @@ const Dashboard = () => {
     }
   };
 
-  // ====================================================
-  // EXPENSES
-  // ====================================================
+  /* =====================================================
+     DATA
+  ===================================================== */
 
-  const expenses =
-    Array.isArray(
-      dashboard.recentExpenses
-    )
-      ? dashboard.recentExpenses
-      : [];
+  const expenses = Array.isArray(
+    dashboard.recentExpenses
+  )
+    ? dashboard.recentExpenses
+    : [];
 
   const filteredExpenses =
     expenses.filter((expense) => {
       const search =
-        searchTerm.toLowerCase();
+        searchTerm.toLowerCase().trim();
 
-      const matchesSearch =
+      const item =
         String(
           expense.itemName || ""
-        )
-          .toLowerCase()
-          .includes(search) ||
+        ).toLowerCase();
+
+      const vendor =
         String(
           expense.vendor || ""
-        )
-          .toLowerCase()
-          .includes(search);
+        ).toLowerCase();
 
-      const matchesCategory =
+      const category =
+        expense.category || "Other";
+
+      const searchMatch =
+        !search ||
+        item.includes(search) ||
+        vendor.includes(search);
+
+      const categoryMatch =
         filterCategory === "All" ||
-        expense.category ===
-          filterCategory;
+        category === filterCategory;
 
       return (
-        matchesSearch &&
-        matchesCategory
+        searchMatch &&
+        categoryMatch
       );
     });
 
-  // ====================================================
-  // CHART DATA - FIXED
-  // ====================================================
-
-  const pieData =
-    normalizeBreakdown(
-      dashboard.categoryBreakdown
-    );
-
-  const paymentMethodPieData =
-    normalizeBreakdown(
-      dashboard.paymentMethodBreakdown
-    );
-
-  // ====================================================
-  // CATEGORY FALLBACK
-  // ====================================================
+  /* =====================================================
+     CHART DATA
+  ===================================================== */
 
   const categoryChartData =
-    pieData.length > 0
-      ? pieData
+    normalizeBreakdown(
+      dashboard.categoryBreakdown
+    ).length > 0
+      ? normalizeBreakdown(
+          dashboard.categoryBreakdown
+        )
       : normalizeBreakdown(
           expenses.reduce(
             (acc, expense) => {
@@ -1358,13 +1231,13 @@ const Dashboard = () => {
           )
         );
 
-  // ====================================================
-  // PAYMENT METHOD FALLBACK
-  // ====================================================
-
   const paymentChartData =
-    paymentMethodPieData.length > 0
-      ? paymentMethodPieData
+    normalizeBreakdown(
+      dashboard.paymentMethodBreakdown
+    ).length > 0
+      ? normalizeBreakdown(
+          dashboard.paymentMethodBreakdown
+        )
       : normalizeBreakdown(
           expenses.reduce(
             (acc, expense) => {
@@ -1384,348 +1257,261 @@ const Dashboard = () => {
           )
         );
 
-  // ====================================================
-  // BUDGET CALCULATIONS
-  // ====================================================
+  const trendData = Array.isArray(
+    dashboard.dailyExpenseTrend
+  )
+    ? dashboard.dailyExpenseTrend.map(
+        (item) => ({
+          date: item.date
+            ? String(item.date).slice(-5)
+            : "",
+          amount: Number(
+            item.amount || 0
+          ),
+        })
+      )
+    : [];
 
-  const totalBudget =
-    Number(
-      budgetSummary.totalBudget || 0
-    );
-
-  const totalBudgetSpent =
-    Number(
-      budgetSummary.totalSpent || 0
-    );
-
-  const budgetPercentage =
-    totalBudget > 0
-      ? (totalBudgetSpent /
-          totalBudget) *
+  const salaryPercentage =
+    Number(dashboard.salary) > 0
+      ? (Number(
+          dashboard.totalExpenses
+        ) /
+          Number(dashboard.salary)) *
         100
       : 0;
 
-  const budgetRemaining =
-    totalBudget -
-    totalBudgetSpent;
-
-  const isBudgetExceeded =
-    totalBudget > 0 &&
-    budgetPercentage >= 100;
-
-  const isBudgetWarning =
-    totalBudget > 0 &&
-    budgetPercentage >= 80 &&
-    budgetPercentage < 100;
-
-  const isBudgetNormal =
-    totalBudget > 0 &&
-    budgetPercentage < 80;
-
-  const getBudgetStatus = () => {
-    if (isBudgetExceeded) {
-      return {
-        title: "Budget Exceeded",
-        message:
-          "You have crossed your monthly budget. Try to control your spending for the remaining days.",
-        className: "alert-danger",
-        badgeClass: "bg-danger",
-        icon: "🚨",
-      };
-    }
-
-    if (isBudgetWarning) {
-      return {
-        title: "Budget Warning",
-        message:
-          "You have used 80% or more of your monthly budget. Spend carefully for the rest of the month.",
-        className: "alert-warning",
-        badgeClass:
-          "bg-warning text-dark",
-        icon: "⚠️",
-      };
-    }
-
-    return {
-      title: "Budget Under Control",
-      message:
-        "Your spending is currently below 80% of your monthly budget.",
-      className: "alert-success",
-      badgeClass: "bg-success",
-      icon: "✅",
-    };
-  };
-
-  const budgetStatus =
-    getBudgetStatus();
-
-  // ====================================================
-  // RENDER
-  // ====================================================
+  /* =====================================================
+     UI
+  ===================================================== */
 
   return (
-    <div className="container-fluid py-4">
+    <div className="min-h-screen bg-slate-50 px-4 py-6 md:px-8">
 
       {/* HEADER */}
 
-      <div className="d-flex justify-content-between align-items-center mb-4">
+      <div className="mx-auto max-w-7xl">
 
-        <div>
-          <h2 className="fw-bold mb-1">
-            Expense Dashboard
-          </h2>
+        <div className="mb-6 flex flex-col gap-4 rounded-2xl bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
 
-          <p className="text-muted mb-0">
-            Track your salary and monthly expenses
-          </p>
-        </div>
+          <div>
+            <h1 className="text-2xl font-bold text-slate-900">
+              Expense Dashboard
+            </h1>
 
-        <div>
-          <div className="input-group">
-            <span className="input-group-text">
-              <CalendarDays size={18} />
-            </span>
+            <p className="mt-1 text-sm text-slate-500">
+              Track your monthly income and expenses
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <CalendarDays
+              size={19}
+              className="text-slate-500"
+            />
 
             <input
               type="month"
-              className="form-control"
               value={selectedMonth}
               onChange={(e) =>
                 setSelectedMonth(
                   e.target.value
                 )
               }
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
             />
           </div>
+
         </div>
 
-      </div>
+        {/* TOP CARDS */}
 
-      {/* ACTION CARDS */}
+        <div className="mb-6 grid gap-4 md:grid-cols-3">
 
-      <div className="row g-4 mb-4">
+          {/* SALARY */}
 
-        {/* SALARY */}
+          <div className="rounded-2xl bg-white p-5 shadow-sm">
 
-        <div className="col-md-4">
-          <div className="dashboard-card p-4 h-100">
-
-            <div className="d-flex align-items-center mb-3">
-              <Wallet
-                size={32}
-                className="me-3"
-              />
+            <div className="mb-4 flex items-center gap-3">
+              <div className="rounded-xl bg-emerald-50 p-3">
+                <Wallet
+                  size={22}
+                  className="text-emerald-600"
+                />
+              </div>
 
               <div>
-                <h5 className="mb-1">
+                <h3 className="font-semibold text-slate-900">
                   Monthly Salary
-                </h5>
+                </h3>
 
-                <small className="text-muted">
+                <p className="text-xs text-slate-500">
                   {selectedMonth}
-                </small>
+                </p>
               </div>
             </div>
 
-            <div className="input-group mb-3">
-
-              <span className="input-group-text">
-                ₹
-              </span>
-
+            <div className="flex">
               <input
                 type="number"
-                className="form-control"
                 placeholder="Enter salary"
                 value={salary}
                 onChange={(e) =>
-                  setSalary(
-                    e.target.value
-                  )
+                  setSalary(e.target.value)
                 }
+                className="w-full rounded-l-lg border border-slate-300 px-3 py-2 outline-none focus:border-blue-500"
               />
 
+              <button
+                onClick={
+                  handleSaveSalary
+                }
+                disabled={savingSalary}
+                className="rounded-r-lg bg-blue-600 px-4 text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                {savingSalary
+                  ? "Saving"
+                  : "Save"}
+              </button>
             </div>
 
-            <button
-              type="button"
-              className="btn btn-success w-100"
-              onClick={
-                handleSaveSalary
-              }
-              disabled={savingSalary}
-            >
-              <Save
-                size={17}
-                className="me-2"
-              />
+          </div>
 
-              {savingSalary
-                ? "Saving..."
-                : "Save Salary"}
+          {/* RECEIPT */}
+
+          <div className="rounded-2xl bg-white p-5 shadow-sm">
+
+            <div className="mb-4 flex items-center gap-3">
+              <div className="rounded-xl bg-purple-50 p-3">
+                <ScanLine
+                  size={22}
+                  className="text-purple-600"
+                />
+              </div>
+
+              <div>
+                <h3 className="font-semibold text-slate-900">
+                  Receipt Scanner
+                </h3>
+
+                <p className="text-xs text-slate-500">
+                  Scan receipt with OCR
+                </p>
+              </div>
+            </div>
+
+            <input
+              type="file"
+              accept="image/*"
+              onChange={
+                handleReceiptChange
+              }
+              className="mb-3 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+
+            <button
+              onClick={
+                handleScanReceipt
+              }
+              disabled={scanning}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60"
+            >
+              <ScanLine size={17} />
+
+              {scanning
+                ? "Scanning..."
+                : "Scan Receipt"}
             </button>
 
           </div>
-        </div>
 
-        {/* ADD EXPENSE */}
+          {/* QUICK ADD */}
 
-        <div className="col-md-4">
-          <div className="dashboard-card p-4 h-100">
+          <div className="rounded-2xl bg-white p-5 shadow-sm">
 
-            <div className="d-flex align-items-center mb-3">
-
-              <Plus
-                size={32}
-                className="me-3"
-              />
-
-              <div>
-                <h5 className="mb-1">
-                  Add Expense
-                </h5>
-
-                <small className="text-muted">
-                  Add expense manually
-                </small>
+            <div className="mb-4 flex items-center gap-3">
+              <div className="rounded-xl bg-blue-50 p-3">
+                <Plus
+                  size={22}
+                  className="text-blue-600"
+                />
               </div>
 
-            </div>
+              <div>
+                <h3 className="font-semibold text-slate-900">
+                  Quick Expense
+                </h3>
 
-            <p className="text-muted">
-              Enter your expense details manually.
-            </p>
+                <p className="text-xs text-slate-500">
+                  Add expense manually
+                </p>
+              </div>
+            </div>
 
             <a
               href="#manual-expense"
-              className="btn btn-primary w-100"
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-blue-600 py-2.5 text-sm font-medium text-blue-600 hover:bg-blue-50"
             >
-              <Plus
-                size={17}
-                className="me-2"
-              />
+              <Plus size={17} />
               Add Expense
             </a>
 
           </div>
+
         </div>
 
-        {/* SCAN */}
+        {/* RECEIPT PREVIEW */}
 
-        <div className="col-md-4">
-          <div className="dashboard-card p-4 h-100">
+        {receiptPreview && (
+          <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
 
-            <div className="d-flex align-items-center mb-3">
+            <h3 className="mb-4 font-semibold text-slate-900">
+              Receipt Preview
+            </h3>
 
-              <ScanLine
-                size={32}
-                className="me-3"
+            <div className="flex justify-center">
+              <img
+                src={receiptPreview}
+                alt="Receipt"
+                className="max-h-80 max-w-full rounded-xl border object-contain"
               />
-
-              <div>
-                <h5 className="mb-1">
-                  Scan Receipt
-                </h5>
-
-                <small className="text-muted">
-                  AI OCR scanner
-                </small>
-              </div>
-
             </div>
 
-            <label className="btn btn-outline-primary w-100">
-
-              <Upload
-                size={17}
-                className="me-2"
-              />
-
-              Choose Receipt
-
-              <input
-                type="file"
-                accept="image/*"
-                hidden
-                onChange={
-                  handleReceiptChange
-                }
-              />
-
-            </label>
-
-            {receiptImage && (
-              <button
-                type="button"
-                className="btn btn-primary w-100 mt-2"
-                onClick={
-                  handleScanReceipt
-                }
-                disabled={scanning}
-              >
-                <ScanLine
-                  size={17}
-                  className="me-2"
-                />
-
-                {scanning
-                  ? "Scanning..."
-                  : "Scan Receipt"}
-              </button>
-            )}
-
           </div>
-        </div>
+        )}
 
-      </div>
+        {/* OCR RESULT */}
 
-      {/* RECEIPT PREVIEW */}
+        {showExtracted && (
+          <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
 
-      {receiptPreview && (
-        <div className="dashboard-card p-4 mb-4">
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-900">
+                  Extracted Receipt Details
+                </h2>
 
-          <h5 className="mb-3">
-            Receipt Preview
-          </h5>
+                <p className="text-sm text-slate-500">
+                  Check OCR details before saving
+                </p>
+              </div>
 
-          <img
-            src={receiptPreview}
-            alt="Receipt preview"
-            style={{
-              maxWidth: "100%",
-              maxHeight: "350px",
-              objectFit: "contain",
-              borderRadius: "10px",
-            }}
-          />
+              <button
+                onClick={() =>
+                  setShowExtracted(false)
+                }
+                className="rounded-lg border px-3 py-2 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
 
-        </div>
-      )}
+            <div className="grid gap-4 md:grid-cols-2">
 
-      {/* OCR RESULT */}
-
-      {showExtracted && (
-        <div className="dashboard-card p-4 mb-4">
-
-          <h4 className="mb-1">
-            Extracted Receipt Details
-          </h4>
-
-          <p className="text-muted">
-            Check and edit OCR results before saving
-          </p>
-
-          <div className="row g-3">
-
-            <div className="col-md-6">
-              <label className="form-label">
-                Date
-              </label>
-
-              <input
+              <InputField
+                label="Date"
                 type="date"
                 name="date"
-                className="form-control"
                 value={
                   extractedData.date
                 }
@@ -1733,17 +1519,10 @@ const Dashboard = () => {
                   handleExtractedChange
                 }
               />
-            </div>
 
-            <div className="col-md-6">
-              <label className="form-label">
-                Item Name
-              </label>
-
-              <input
-                type="text"
+              <InputField
+                label="Item Name"
                 name="itemName"
-                className="form-control"
                 value={
                   extractedData.itemName
                 }
@@ -1751,42 +1530,24 @@ const Dashboard = () => {
                   handleExtractedChange
                 }
               />
-            </div>
 
-            <div className="col-md-6">
-              <label className="form-label">
-                Amount
-              </label>
+              <InputField
+                label="Amount"
+                type="number"
+                name="amount"
+                value={
+                  extractedData.amount
+                }
+                onChange={
+                  handleExtractedChange
+                }
+              />
 
-              <div className="input-group">
-                <span className="input-group-text">
-                  ₹
-                </span>
-
-                <input
-                  type="number"
-                  name="amount"
-                  className="form-control"
-                  value={
-                    extractedData.amount
-                  }
-                  onChange={
-                    handleExtractedChange
-                  }
-                />
-              </div>
-            </div>
-
-            <div className="col-md-6">
-              <label className="form-label">
-                Quantity
-              </label>
-
-              <input
+              <InputField
+                label="Quantity"
                 type="number"
                 min="1"
                 name="quantity"
-                className="form-control"
                 value={
                   extractedData.quantity
                 }
@@ -1794,17 +1555,10 @@ const Dashboard = () => {
                   handleExtractedChange
                 }
               />
-            </div>
 
-            <div className="col-md-6">
-              <label className="form-label">
-                Vendor
-              </label>
-
-              <input
-                type="text"
+              <InputField
+                label="Vendor"
                 name="vendor"
-                className="form-control"
                 value={
                   extractedData.vendor
                 }
@@ -1812,653 +1566,200 @@ const Dashboard = () => {
                   handleExtractedChange
                 }
               />
-            </div>
 
-            <div className="col-md-6">
-              <label className="form-label">
-                Category
-              </label>
-
-              <CategoryDropdown
+              <SelectField
+                label="Category"
+                name="category"
                 value={
                   extractedData.category
                 }
-                open={categoryOpen}
-                setOpen={
-                  setCategoryOpen
-                }
-                onChange={(value) =>
-                  setExtractedData(
-                    (prev) => ({
-                      ...prev,
-                      category:
-                        value,
-                    })
-                  )
+                options={categories}
+                onChange={
+                  handleExtractedChange
                 }
               />
-            </div>
 
-            <div className="col-md-6">
-              <label className="form-label">
-                Payment Method
-              </label>
-
-              <select
-                className="form-select"
+              <SelectField
+                label="Payment Method"
                 name="paymentMethod"
                 value={
                   extractedData.paymentMethod
                 }
+                options={
+                  paymentMethods
+                }
                 onChange={
                   handleExtractedChange
                 }
-              >
-                {paymentMethods.map(
-                  (method) => (
-                    <option
-                      key={method}
-                      value={method}
-                    >
-                      {method}
-                    </option>
-                  )
-                )}
-              </select>
-            </div>
-
-          </div>
-
-          <div className="d-flex gap-2 mt-4">
-
-            <button
-              type="button"
-              className="btn btn-success"
-              onClick={
-                handleSaveScannedExpense
-              }
-            >
-              <Save
-                size={17}
-                className="me-2"
               />
-              Save Expense
-            </button>
-
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() =>
-                setShowExtracted(false)
-              }
-            >
-              Cancel
-            </button>
-
-          </div>
-
-        </div>
-      )}
-
-      {/* STAT CARDS */}
-
-      <div className="row g-4 mb-4">
-
-        <div className="col-md-3">
-          <div className="dashboard-card p-4">
-
-            <div className="d-flex justify-content-between">
-
-              <div>
-                <small className="text-muted">
-                  Salary
-                </small>
-
-                <h3 className="mt-2">
-                  {formatCurrency(
-                    dashboard.salary
-                  )}
-                </h3>
-              </div>
-
-              <Wallet />
 
             </div>
 
-          </div>
-        </div>
+            <div className="mt-5 flex gap-2">
 
-        <div className="col-md-3">
-          <div className="dashboard-card p-4">
-
-            <div className="d-flex justify-content-between">
-
-              <div>
-                <small className="text-muted">
-                  Total Expenses
-                </small>
-
-                <h3 className="mt-2">
-                  {formatCurrency(
-                    dashboard.totalExpenses
-                  )}
-                </h3>
-              </div>
-
-              <TrendingDown />
-
-            </div>
-
-          </div>
-        </div>
-
-        <div className="col-md-3">
-          <div className="dashboard-card p-4">
-
-            <div className="d-flex justify-content-between">
-
-              <div>
-                <small className="text-muted">
-                  Remaining
-                </small>
-
-                <h3
-                  className={`mt-2 ${
-                    dashboard.remaining < 0
-                      ? "text-danger"
-                      : "text-success"
-                  }`}
-                >
-                  {formatCurrency(
-                    dashboard.remaining
-                  )}
-                </h3>
-              </div>
-
-              <CreditCard />
-
-            </div>
-
-          </div>
-        </div>
-
-        <div className="col-md-3">
-          <div className="dashboard-card p-4">
-
-            <div className="d-flex justify-content-between">
-
-              <div>
-                <small className="text-muted">
-                  Expenses
-                </small>
-
-                <h3 className="mt-2">
-                  {dashboard.expenseCount}
-                </h3>
-              </div>
-
-              <Receipt />
-
-            </div>
-
-          </div>
-        </div>
-
-      </div>
-
-      {/* BUDGET PLANNER */}
-
-      <div className="dashboard-card p-4 mb-4">
-
-        <div className="d-flex justify-content-between align-items-center mb-4">
-
-          <div>
-            <h3 className="mb-1">
-              💰 Monthly Budget
-            </h3>
-
-            <p className="text-muted mb-0">
-              Plan and control your spending for{" "}
-              {selectedMonth}.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            className="btn btn-primary"
-            onClick={() =>
-              setShowBudgetForm(
-                (prev) => !prev
-              )
-            }
-          >
-            {showBudgetForm
-              ? "Close"
-              : "Set Budget"}
-          </button>
-
-        </div>
-
-        {budgetSummary.totalBudget > 0 ? (
-          <>
-
-            <div
-              className={`alert ${budgetStatus.className} d-flex align-items-start gap-3 mb-4`}
-              role="alert"
-            >
-
-              <div
-                style={{
-                  fontSize: "28px",
-                  lineHeight: 1,
-                }}
+              <button
+                onClick={
+                  handleSaveExtractedExpense
+                }
+                className="flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700"
               >
-                {budgetStatus.icon}
-              </div>
+                <Save size={17} />
+                Save Expense
+              </button>
 
-              <div className="flex-grow-1">
-
-                <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
-
-                  <h5 className="mb-1">
-                    {budgetStatus.title}
-                  </h5>
-
-                  <span
-                    className={`badge ${budgetStatus.badgeClass}`}
-                  >
-                    {budgetPercentage.toFixed(
-                      1
-                    )}
-                    % Used
-                  </span>
-
-                </div>
-
-                <p className="mb-0">
-                  {budgetStatus.message}
-                </p>
-
-              </div>
-
-            </div>
-
-            <div className="row g-3 mb-4">
-
-              <div className="col-md-4">
-                <div className="p-3 border rounded">
-                  <small className="text-muted">
-                    Total Budget
-                  </small>
-
-                  <h4 className="mb-0 mt-1">
-                    {formatCurrency(
-                      totalBudget
-                    )}
-                  </h4>
-                </div>
-              </div>
-
-              <div className="col-md-4">
-                <div className="p-3 border rounded">
-                  <small className="text-muted">
-                    Budget Spent
-                  </small>
-
-                  <h4 className="mb-0 mt-1">
-                    {formatCurrency(
-                      totalBudgetSpent
-                    )}
-                  </h4>
-                </div>
-              </div>
-
-              <div className="col-md-4">
-                <div className="p-3 border rounded">
-                  <small className="text-muted">
-                    Remaining Budget
-                  </small>
-
-                  <h4
-                    className={`mb-0 mt-1 ${
-                      budgetRemaining < 0
-                        ? "text-danger"
-                        : "text-success"
-                    }`}
-                  >
-                    {formatCurrency(
-                      budgetRemaining
-                    )}
-                  </h4>
-                </div>
-              </div>
-
-            </div>
-
-            <div className="mb-4">
-
-              <div className="d-flex justify-content-between mb-2">
-                <strong>
-                  Budget Usage
-                </strong>
-
-                <strong
-                  className={
-                    isBudgetExceeded
-                      ? "text-danger"
-                      : isBudgetWarning
-                      ? "text-warning"
-                      : "text-success"
-                  }
-                >
-                  {budgetPercentage.toFixed(
-                    1
-                  )}
-                  %
-                </strong>
-              </div>
-
-              <div
-                className="progress"
-                style={{
-                  height: "15px",
-                }}
+              <button
+                onClick={() =>
+                  setShowExtracted(false)
+                }
+                className="rounded-lg border px-4 py-2.5 text-sm text-slate-600 hover:bg-slate-50"
               >
-                <div
-                  className={`progress-bar ${
-                    isBudgetExceeded
-                      ? "bg-danger"
-                      : isBudgetWarning
-                      ? "bg-warning"
-                      : "bg-success"
-                  }`}
-                  style={{
-                    width: `${Math.min(
-                      budgetPercentage,
-                      100
-                    )}%`,
-                  }}
-                />
-              </div>
-
-              {isBudgetExceeded && (
-                <div className="mt-2 text-danger fw-semibold">
-                  You exceeded your budget by{" "}
-                  {formatCurrency(
-                    Math.abs(
-                      budgetRemaining
-                    )
-                  )}
-                </div>
-              )}
-
-              {isBudgetWarning && (
-                <div className="mt-2 text-warning fw-semibold">
-                  ⚠️ Only{" "}
-                  {formatCurrency(
-                    Math.max(
-                      budgetRemaining,
-                      0
-                    )
-                  )}{" "}
-                  budget remaining.
-                </div>
-              )}
-
-              {isBudgetNormal && (
-                <div className="mt-2 text-success fw-semibold">
-                  ✅ You still have{" "}
-                  {formatCurrency(
-                    budgetRemaining
-                  )}{" "}
-                  available.
-                </div>
-              )}
+                Cancel
+              </button>
 
             </div>
-
-            <div>
-
-              <h5 className="mb-3">
-                Category Budgets
-              </h5>
-
-              <div className="row g-3">
-
-                {categories.map(
-                  (category) => {
-                    const summary =
-                      categoryBudgetSummary[
-                        category
-                      ] || {};
-
-                    const categorySpent =
-                      Number(
-                        summary.spent || 0
-                      );
-
-                    const categoryBudget =
-                      Number(
-                        summary.budget || 0
-                      );
-
-                    const categoryPercentage =
-                      categoryBudget > 0
-                        ? (categorySpent /
-                            categoryBudget) *
-                          100
-                        : 0;
-
-                    const categoryExceeded =
-                      categoryBudget > 0 &&
-                      categoryPercentage >=
-                        100;
-
-                    const categoryWarning =
-                      categoryBudget > 0 &&
-                      categoryPercentage >=
-                        80 &&
-                      categoryPercentage < 100;
-
-                    return (
-                      <div
-                        className="col-md-6 col-lg-3"
-                        key={category}
-                      >
-
-                        <div
-                          className={`border rounded p-3 ${
-                            categoryExceeded
-                              ? "border-danger"
-                              : categoryWarning
-                              ? "border-warning"
-                              : ""
-                          }`}
-                        >
-
-                          <div className="d-flex justify-content-between">
-
-                            <strong>
-                              {category}
-                            </strong>
-
-                            {categoryExceeded ? (
-                              <span className="text-danger">
-                                🚨
-                              </span>
-                            ) : categoryWarning ? (
-                              <span className="text-warning">
-                                ⚠️
-                              </span>
-                            ) : (
-                              categoryBudget >
-                                0 && (
-                                <span className="text-success">
-                                  ✓
-                                </span>
-                              )
-                            )}
-
-                          </div>
-
-                          <div className="mt-2">
-                            <small className="text-muted">
-                              Spent
-                            </small>
-
-                            <div>
-                              {formatCurrency(
-                                categorySpent
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="mt-2">
-                            <small className="text-muted">
-                              Limit
-                            </small>
-
-                            <div>
-                              {formatCurrency(
-                                categoryBudget
-                              )}
-                            </div>
-                          </div>
-
-                          {categoryBudget >
-                            0 && (
-                            <>
-                              <div className="progress mt-2">
-                                <div
-                                  className={`progress-bar ${
-                                    categoryExceeded
-                                      ? "bg-danger"
-                                      : categoryWarning
-                                      ? "bg-warning"
-                                      : "bg-success"
-                                  }`}
-                                  style={{
-                                    width: `${Math.min(
-                                      categoryPercentage,
-                                      100
-                                    )}%`,
-                                  }}
-                                />
-                              </div>
-
-                              <small
-                                className={`d-block mt-1 ${
-                                  categoryExceeded
-                                    ? "text-danger"
-                                    : categoryWarning
-                                    ? "text-warning"
-                                    : "text-success"
-                                }`}
-                              >
-                                {categoryPercentage.toFixed(
-                                  1
-                                )}
-                                % used
-                              </small>
-                            </>
-                          )}
-
-                        </div>
-
-                      </div>
-                    );
-                  }
-                )}
-
-              </div>
-
-            </div>
-
-          </>
-        ) : (
-          <div className="text-center py-4">
-
-            <Wallet
-              size={45}
-              className="mb-3"
-            />
-
-            <h5>
-              No budget set
-            </h5>
-
-            <p className="text-muted">
-              Set a monthly budget to track your spending.
-            </p>
 
           </div>
         )}
 
-        {/* SET BUDGET FORM */}
+        {/* SUMMARY */}
 
-        {showBudgetForm && (
-          <div className="border-top pt-4 mt-4">
+        <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 
-            <h5 className="mb-3">
-              Set Monthly Budget
-            </h5>
+          <SummaryCard
+            title="Salary"
+            value={dashboard.salary}
+            icon={<Wallet size={22} />}
+          />
 
-            <div className="row g-3">
+          <SummaryCard
+            title="Expenses"
+            value={
+              dashboard.totalExpenses
+            }
+            icon={
+              <TrendingDown
+                size={22}
+              />
+            }
+            danger
+          />
 
-              <div className="col-12">
+          <SummaryCard
+            title="Balance"
+            value={
+              dashboard.remaining
+            }
+            icon={
+              <CreditCard
+                size={22}
+              />
+            }
+            danger={
+              dashboard.remaining < 0
+            }
+          />
 
-                <label className="form-label">
-                  Total Monthly Budget
-                </label>
+          <div className="rounded-2xl bg-white p-5 shadow-sm">
 
-                <div className="input-group">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-slate-500">
+                  Expenses
+                </p>
 
-                  <span className="input-group-text">
-                    ₹
-                  </span>
-
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    className="form-control"
-                    name="totalBudget"
-                    placeholder="Eg: 20000"
-                    value={
-                      budget.totalBudget
-                    }
-                    onChange={
-                      handleBudgetChange
-                    }
-                  />
-
-                </div>
-
+                <p className="mt-2 text-2xl font-bold text-slate-900">
+                  {dashboard.expenseCount}
+                </p>
               </div>
 
-              {categories.map(
-                (category) => (
-                  <div
-                    className="col-md-6 col-lg-3"
-                    key={category}
-                  >
+              <div className="rounded-xl bg-slate-100 p-3">
+                <Receipt
+                  size={22}
+                  className="text-slate-600"
+                />
+              </div>
+            </div>
 
-                    <label className="form-label">
-                      {category}
-                    </label>
+          </div>
 
-                    <div className="input-group">
+        </div>
 
-                      <span className="input-group-text">
-                        ₹
-                      </span>
+        {/* BUDGET */}
+
+        <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
+
+          <div className="mb-5 flex items-center justify-between">
+
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">
+                Monthly Budget
+              </h2>
+
+              <p className="text-sm text-slate-500">
+                Set and track your spending limit
+              </p>
+            </div>
+
+            <button
+              onClick={() =>
+                setShowBudgetForm(
+                  !showBudgetForm
+                )
+              }
+              className="rounded-lg border border-blue-600 px-3 py-2 text-sm font-medium text-blue-600 hover:bg-blue-50"
+            >
+              {showBudgetForm
+                ? "Close"
+                : "Edit Budget"}
+            </button>
+
+          </div>
+
+          {showBudgetForm && (
+            <form
+              onSubmit={
+                handleSaveBudget
+              }
+              className="mb-6 rounded-xl bg-slate-50 p-4"
+            >
+
+              <div className="mb-5 max-w-sm">
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Total Budget
+                </label>
+
+                <input
+                  type="number"
+                  min="0"
+                  name="totalBudget"
+                  value={
+                    budget.totalBudget
+                  }
+                  onChange={
+                    handleBudgetChange
+                  }
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <h3 className="mb-3 text-sm font-semibold text-slate-800">
+                Category Budgets
+              </h3>
+
+              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
+
+                {categories.map(
+                  (category) => (
+                    <div
+                      key={category}
+                    >
+                      <label className="mb-1 block text-xs text-slate-500">
+                        {category}
+                      </label>
 
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
-                        className="form-control"
-                        placeholder="0"
                         value={
                           budget
                             .categoryBudgets[
@@ -2471,398 +1772,555 @@ const Dashboard = () => {
                             e.target.value
                           )
                         }
+                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500"
                       />
-
                     </div>
+                  )
+                )}
 
-                  </div>
-                )
-              )}
-
-            </div>
-
-            <div className="d-flex gap-2 mt-4">
+              </div>
 
               <button
-                type="button"
-                className="btn btn-success"
-                onClick={
-                  handleSaveBudget
-                }
-                disabled={
-                  savingBudget
-                }
+                type="submit"
+                disabled={savingBudget}
+                className="mt-5 flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
               >
-
-                <Save
-                  size={17}
-                  className="me-2"
-                />
+                <Save size={17} />
 
                 {savingBudget
                   ? "Saving..."
                   : "Save Budget"}
-
               </button>
 
-            </div>
+            </form>
+          )}
+
+          <div className="grid gap-4 md:grid-cols-3">
+
+            <BudgetCard
+              title="Budget"
+              value={
+                budgetSummary.totalBudget
+              }
+            />
+
+            <BudgetCard
+              title="Spent"
+              value={
+                budgetSummary.totalSpent
+              }
+              danger
+            />
+
+            <BudgetCard
+              title="Remaining"
+              value={
+                budgetSummary.remaining
+              }
+              danger={
+                budgetSummary.remaining <
+                0
+              }
+            />
 
           </div>
-        )}
 
-      </div>
+          {budgetSummary.totalBudget >
+            0 && (
+            <div className="mt-5">
 
-      {/* SPENDING PROGRESS */}
+              <div className="mb-2 flex justify-between text-sm">
+                <span className="font-medium">
+                  Budget Usage
+                </span>
 
-      <div className="dashboard-card p-4 mb-4">
+                <span
+                  className={
+                    budgetSummary.exceeded
+                      ? "font-semibold text-red-600"
+                      : "font-semibold text-blue-600"
+                  }
+                >
+                  {Number(
+                    budgetSummary.percentage
+                  ).toFixed(1)}
+                  %
+                </span>
+              </div>
 
-        <div className="d-flex justify-content-between mb-2">
+              <div className="h-3 overflow-hidden rounded-full bg-slate-100">
 
-          <h5>
-            Spending Progress
-          </h5>
+                <div
+                  className={
+                    budgetSummary.exceeded
+                      ? "h-full bg-red-500"
+                      : "h-full bg-blue-600"
+                  }
+                  style={{
+                    width: `${Math.min(
+                      budgetSummary.percentage,
+                      100
+                    )}%`,
+                  }}
+                />
 
-          <strong>
-            {Number(
-              dashboard.percentageSpent ||
-                0
-            ).toFixed(1)}
-            %
-          </strong>
+              </div>
+
+            </div>
+          )}
 
         </div>
+
+        {/* SALARY PROGRESS */}
+
+        <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
+
+          <div className="mb-2 flex justify-between">
+            <h2 className="font-semibold text-slate-900">
+              Salary Spending
+            </h2>
+
+            <span className="font-semibold text-slate-700">
+              {salaryPercentage.toFixed(
+                1
+              )}
+              %
+            </span>
+          </div>
+
+          <div className="mb-2 flex justify-between text-sm text-slate-500">
+            <span>
+              {formatCurrency(
+                dashboard.totalExpenses
+              )}{" "}
+              spent
+            </span>
+
+            <span>
+              {formatCurrency(
+                dashboard.salary
+              )}
+            </span>
+          </div>
+
+          <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+
+            <div
+              className={
+                salaryPercentage >= 100
+                  ? "h-full bg-red-500"
+                  : salaryPercentage >= 80
+                  ? "h-full bg-amber-500"
+                  : "h-full bg-emerald-500"
+              }
+              style={{
+                width: `${Math.min(
+                  salaryPercentage,
+                  100
+                )}%`,
+              }}
+            />
+
+          </div>
+
+        </div>
+
+        {/* CHARTS */}
+
+        <div className="mb-6 grid gap-6 lg:grid-cols-2">
+
+          <ChartCard
+            title="Category Spending"
+            data={categoryChartData}
+            colors={categoryColors}
+            fallbackColors={chartColors}
+          />
+
+          <ChartCard
+            title="Payment Method Spending"
+            data={paymentChartData}
+            colors={
+              paymentMethodColors
+            }
+            fallbackColors={chartColors}
+          />
+
+        </div>
+
+        {/* DAILY TREND */}
+
+        <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
+
+          <h2 className="mb-5 text-lg font-bold text-slate-900">
+            Daily Expense Trend
+          </h2>
+
+          {trendData.length > 0 ? (
+            <div className="h-80 w-full">
+
+              <ResponsiveContainer>
+                <LineChart
+                  data={trendData}
+                >
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                  />
+
+                  <XAxis dataKey="date" />
+
+                  <YAxis />
+
+                  <Tooltip
+                    formatter={(value) =>
+                      formatCurrency(
+                        value
+                      )
+                    }
+                  />
+
+                  <Legend />
+
+                  <Line
+                    type="monotone"
+                    dataKey="amount"
+                    name="Expense"
+                    stroke="#2563eb"
+                    strokeWidth={3}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+
+            </div>
+          ) : (
+            <EmptyState text="No daily expense data" />
+          )}
+
+        </div>
+
+        {/* MONTHLY REPORT */}
+
+        <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
+
+          <div className="mb-5 flex items-center justify-between">
+
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">
+                Monthly Report
+              </h2>
+
+              <p className="text-sm text-slate-500">
+                Financial summary for{" "}
+                {selectedMonth}
+              </p>
+            </div>
+
+            {reportLoading && (
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+            )}
+
+          </div>
+
+          {monthlyReport && (
+            <>
+              <div className="mb-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+
+                <ReportCard
+                  title="Income"
+                  value={
+                    monthlyReport.salary
+                  }
+                />
+
+                <ReportCard
+                  title="Expenses"
+                  value={
+                    monthlyReport.totalExpenses
+                  }
+                  danger
+                />
+
+                <ReportCard
+                  title="Balance"
+                  value={
+                    Number(
+                      monthlyReport.salary ||
+                        0
+                    ) -
+                    Number(
+                      monthlyReport.totalExpenses ||
+                        0
+                    )
+                  }
+                  danger={
+                    Number(
+                      monthlyReport.salary ||
+                        0
+                    ) -
+                      Number(
+                        monthlyReport.totalExpenses ||
+                          0
+                      ) <
+                    0
+                  }
+                />
+
+                <ReportCard
+                  title="Expense Count"
+                  value={
+                    monthlyReport.expenseCount ||
+                    0
+                  }
+                  currency={false}
+                />
+
+              </div>
+
+              <div className="grid gap-6 md:grid-cols-2">
+
+                <div className="rounded-xl border p-4">
+
+                  <h3 className="mb-4 font-semibold">
+                    Category Spending
+                  </h3>
+
+                  {Array.isArray(
+                    monthlyReport.categoryBreakdown
+                  ) &&
+                  monthlyReport
+                    .categoryBreakdown
+                    .length > 0 ? (
+                    monthlyReport.categoryBreakdown.map(
+                      (
+                        item,
+                        index
+                      ) => {
+                        const amount =
+                          Number(
+                            item.value ||
+                              0
+                          );
+
+                        const total =
+                          Number(
+                            monthlyReport.totalExpenses ||
+                              0
+                          );
+
+                        const percentage =
+                          total > 0
+                            ? (amount /
+                                total) *
+                              100
+                            : 0;
+
+                        return (
+                          <div
+                            key={`${item.name}-${index}`}
+                            className="mb-4"
+                          >
+                            <div className="mb-1 flex justify-between text-sm">
+                              <span>
+                                {
+                                  item.name
+                                }
+                              </span>
+
+                              <span className="font-semibold">
+                                {formatCurrency(
+                                  amount
+                                )}
+                              </span>
+                            </div>
+
+                            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+
+                              <div
+                                className="h-full"
+                                style={{
+                                  width: `${Math.min(
+                                    percentage,
+                                    100
+                                  )}%`,
+                                  backgroundColor:
+                                    categoryColors[
+                                      item.name
+                                    ] ||
+                                    chartColors[
+                                      index %
+                                        chartColors.length
+                                    ],
+                                }}
+                              />
+
+                            </div>
+                          </div>
+                        );
+                      }
+                    )
+                  ) : (
+                    <EmptyState text="No category data" />
+                  )}
+
+                </div>
+
+                <div className="rounded-xl border p-4">
+
+                  <h3 className="mb-4 font-semibold">
+                    Payment Methods
+                  </h3>
+
+                  {Array.isArray(
+                    monthlyReport.paymentMethodBreakdown
+                  ) &&
+                  monthlyReport
+                    .paymentMethodBreakdown
+                    .length > 0 ? (
+                    monthlyReport.paymentMethodBreakdown.map(
+                      (
+                        item,
+                        index
+                      ) => {
+                        const amount =
+                          Number(
+                            item.value ||
+                              0
+                          );
+
+                        const total =
+                          Number(
+                            monthlyReport.totalExpenses ||
+                              0
+                          );
+
+                        const percentage =
+                          total > 0
+                            ? (amount /
+                                total) *
+                              100
+                            : 0;
+
+                        return (
+                          <div
+                            key={`${item.name}-${index}`}
+                            className="mb-4"
+                          >
+                            <div className="mb-1 flex justify-between text-sm">
+                              <span>
+                                {
+                                  item.name
+                                }
+                              </span>
+
+                              <span className="font-semibold">
+                                {formatCurrency(
+                                  amount
+                                )}
+                              </span>
+                            </div>
+
+                            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+
+                              <div
+                                className="h-full"
+                                style={{
+                                  width: `${Math.min(
+                                    percentage,
+                                    100
+                                  )}%`,
+                                  backgroundColor:
+                                    paymentMethodColors[
+                                      item.name
+                                    ] ||
+                                    chartColors[
+                                      index %
+                                        chartColors.length
+                                    ],
+                                }}
+                              />
+
+                            </div>
+                          </div>
+                        );
+                      }
+                    )
+                  ) : (
+                    <EmptyState text="No payment data" />
+                  )}
+
+                </div>
+
+              </div>
+
+              {monthlyReport.highestExpense && (
+                <div className="mt-5 flex items-center justify-between rounded-xl bg-amber-50 p-4">
+
+                  <div>
+                    <p className="text-xs font-medium text-amber-700">
+                      Highest Expense
+                    </p>
+
+                    <h3 className="font-semibold text-slate-900">
+                      {
+                        monthlyReport
+                          .highestExpense
+                          .itemName
+                      }
+                    </h3>
+
+                    <p className="text-sm text-slate-500">
+                      {
+                        monthlyReport
+                          .highestExpense
+                          .category
+                      }
+                    </p>
+                  </div>
+
+                  <p className="text-lg font-bold text-red-600">
+                    {formatCurrency(
+                      monthlyReport
+                        .highestExpense
+                        .amount
+                    )}
+                  </p>
+
+                </div>
+              )}
+
+            </>
+          )}
+
+        </div>
+
+        {/* MANUAL EXPENSE */}
 
         <div
-          className="progress"
-          style={{
-            height: "15px",
-          }}
+          id="manual-expense"
+          className="mb-6 rounded-2xl bg-white p-5 shadow-sm"
         >
-          <div
-            className={`progress-bar ${
-              dashboard.percentageSpent >=
-              100
-                ? "bg-danger"
-                : dashboard.percentageSpent >=
-                  80
-                ? "bg-warning"
-                : "bg-success"
-            }`}
-            style={{
-              width: `${Math.min(
-                Number(
-                  dashboard.percentageSpent ||
-                    0
-                ),
-                100
-              )}%`,
-            }}
-          />
-        </div>
 
-      </div>
+          <div className="mb-5">
+            <h2 className="text-lg font-bold text-slate-900">
+              Add Expense
+            </h2>
 
-      {/* ==================================================
-          ANALYTICS
-      ================================================== */}
-
-      <div className="row g-4 mb-4">
-
-        {/* CATEGORY SPENDING */}
-
-        <div className="col-lg-6">
-
-          <div className="dashboard-card p-4 h-100">
-
-            <h5 className="mb-4">
-              Category Spending
-            </h5>
-
-            {categoryChartData.length >
-            0 ? (
-              <ResponsiveContainer
-                width="100%"
-                height={320}
-              >
-
-                <PieChart>
-
-                  <Pie
-                    data={
-                      categoryChartData
-                    }
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={100}
-                    label
-                  >
-
-                    {categoryChartData.map(
-                      (entry, index) => (
-                        <Cell
-                          key={`category-cell-${index}`}
-                          fill={
-                            categoryColors[
-                              entry.name
-                            ] ||
-                            chartColors[
-                              index %
-                                chartColors.length
-                            ]
-                          }
-                        />
-                      )
-                    )}
-
-                  </Pie>
-
-                  <Tooltip
-                    formatter={(value) =>
-                      formatCurrency(value)
-                    }
-                  />
-
-                  <Legend />
-
-                </PieChart>
-
-              </ResponsiveContainer>
-            ) : (
-              <div className="text-center text-muted py-5">
-                No expense data
-              </div>
-            )}
-
+            <p className="text-sm text-slate-500">
+              Add an expense manually
+            </p>
           </div>
 
-        </div>
-
-        {/* PAYMENT METHOD */}
-
-        <div className="col-lg-6">
-
-          <div className="dashboard-card p-4 h-100">
-
-            <h5 className="mb-4">
-              Payment Method Spending
-            </h5>
-
-            {paymentChartData.length >
-            0 ? (
-              <ResponsiveContainer
-                width="100%"
-                height={320}
-              >
-
-                <PieChart>
-
-                  <Pie
-                    data={
-                      paymentChartData
-                    }
-                    dataKey="value"
-                    nameKey="name"
-                    cx="50%"
-                    cy="50%"
-                    outerRadius={100}
-                    label
-                  >
-
-                    {paymentChartData.map(
-                      (entry, index) => (
-                        <Cell
-                          key={`payment-cell-${index}`}
-                          fill={
-                            paymentMethodColors[
-                              entry.name
-                            ] ||
-                            chartColors[
-                              index %
-                                chartColors.length
-                            ]
-                          }
-                        />
-                      )
-                    )}
-
-                  </Pie>
-
-                  <Tooltip
-                    formatter={(value) =>
-                      formatCurrency(value)
-                    }
-                  />
-
-                  <Legend />
-
-                </PieChart>
-
-              </ResponsiveContainer>
-            ) : (
-              <div className="text-center text-muted py-5">
-                No payment method data
-              </div>
-            )}
-
-          </div>
-
-        </div>
-
-      </div>
-
-      {/* FINANCIAL SUMMARY */}
-
-      <div className="dashboard-card p-4 mb-4">
-
-        <h5 className="mb-4">
-          Financial Summary
-        </h5>
-
-        <div className="row g-3">
-
-          <div className="col-md-4">
-            <div className="border rounded p-3">
-
-              <small className="text-muted">
-                Salary
-              </small>
-
-              <h5>
-                {formatCurrency(
-                  dashboard.salary
-                )}
-              </h5>
-
-            </div>
-          </div>
-
-          <div className="col-md-4">
-            <div className="border rounded p-3">
-
-              <small className="text-muted">
-                Expenses
-              </small>
-
-              <h5>
-                {formatCurrency(
-                  dashboard.totalExpenses
-                )}
-              </h5>
-
-            </div>
-          </div>
-
-          <div className="col-md-4">
-            <div className="border rounded p-3">
-
-              <small className="text-muted">
-                Remaining Balance
-              </small>
-
-              <h3
-                className={
-                  dashboard.remaining < 0
-                    ? "text-danger"
-                    : "text-success"
-                }
-              >
-                {formatCurrency(
-                  dashboard.remaining
-                )}
-              </h3>
-
-            </div>
-          </div>
-
-        </div>
-
-      </div>
-
-      {/* DAILY TREND */}
-
-      <div className="dashboard-card p-4 mb-4">
-
-        <h5 className="mb-4">
-          Daily Expense Trend
-        </h5>
-
-        {dashboard.dailyExpenseTrend
-          .length > 0 ? (
-          <ResponsiveContainer
-            width="100%"
-            height={320}
+          <form
+            onSubmit={
+              handleAddExpense
+            }
           >
 
-            <LineChart
-              data={
-                dashboard.dailyExpenseTrend
-              }
-            >
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
 
-              <CartesianGrid
-                strokeDasharray="3 3"
-              />
-
-              <XAxis
-                dataKey="date"
-              />
-
-              <YAxis />
-
-              <Tooltip
-                formatter={(value) =>
-                  formatCurrency(value)
-                }
-              />
-
-              <Line
-                type="monotone"
-                dataKey="amount"
-                strokeWidth={3}
-              />
-
-            </LineChart>
-
-          </ResponsiveContainer>
-        ) : (
-          <div className="text-center text-muted py-5">
-            No daily expense data
-          </div>
-        )}
-
-      </div>
-
-      {/* MANUAL EXPENSE */}
-
-      <div
-        id="manual-expense"
-        className="dashboard-card p-4 mb-4"
-      >
-
-        <h4 className="mb-4">
-          Add Manual Expense
-        </h4>
-
-        <form
-          onSubmit={
-            handleCreateExpense
-          }
-        >
-
-          <div className="row g-3">
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Date
-              </label>
-
-              <input
+              <InputField
+                label="Date"
                 type="date"
                 name="date"
-                className="form-control"
                 value={
                   manualExpense.date
                 }
@@ -2871,18 +2329,9 @@ const Dashboard = () => {
                 }
               />
 
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Item Name
-              </label>
-
-              <input
-                type="text"
+              <InputField
+                label="Item Name"
                 name="itemName"
-                className="form-control"
                 placeholder="Eg: Grocery"
                 value={
                   manualExpense.itemName
@@ -2892,48 +2341,24 @@ const Dashboard = () => {
                 }
               />
 
-            </div>
+              <InputField
+                label="Amount"
+                type="number"
+                name="amount"
+                placeholder="0"
+                value={
+                  manualExpense.amount
+                }
+                onChange={
+                  handleManualExpenseChange
+                }
+              />
 
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Amount
-              </label>
-
-              <div className="input-group">
-
-                <span className="input-group-text">
-                  ₹
-                </span>
-
-                <input
-                  type="number"
-                  name="amount"
-                  className="form-control"
-                  placeholder="850"
-                  value={
-                    manualExpense.amount
-                  }
-                  onChange={
-                    handleManualExpenseChange
-                  }
-                />
-
-              </div>
-
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Quantity
-              </label>
-
-              <input
+              <InputField
+                label="Quantity"
                 type="number"
                 min="1"
                 name="quantity"
-                className="form-control"
                 value={
                   manualExpense.quantity
                 }
@@ -2942,432 +2367,254 @@ const Dashboard = () => {
                 }
               />
 
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Vendor
-              </label>
-
-              <div className="input-group">
-
-                <span className="input-group-text">
-                  <Store size={17} />
-                </span>
-
-                <input
-                  type="text"
-                  name="vendor"
-                  className="form-control"
-                  placeholder="ABC Supermarket"
-                  value={
-                    manualExpense.vendor
-                  }
-                  onChange={
-                    handleManualExpenseChange
-                  }
-                />
-
-              </div>
-
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Category
-              </label>
-
-              <CategoryDropdown
+              <InputField
+                label="Vendor"
+                name="vendor"
+                placeholder="Eg: ABC Supermarket"
                 value={
-                  manualExpense.category
-                }
-                open={categoryOpen}
-                setOpen={
-                  setCategoryOpen
-                }
-                onChange={(value) =>
-                  setManualExpense(
-                    (prev) => ({
-                      ...prev,
-                      category:
-                        value,
-                    })
-                  )
-                }
-              />
-
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Payment Method
-              </label>
-
-              <select
-                className="form-select"
-                name="paymentMethod"
-                value={
-                  manualExpense.paymentMethod
+                  manualExpense.vendor
                 }
                 onChange={
                   handleManualExpenseChange
                 }
-              >
+              />
 
-                {paymentMethods.map(
-                  (method) => (
-                    <option
-                      key={method}
-                      value={method}
-                    >
-                      {method}
-                    </option>
-                  )
-                )}
+              <SelectField
+                label="Category"
+                name="category"
+                value={
+                  manualExpense.category
+                }
+                options={categories}
+                onChange={
+                  handleManualExpenseChange
+                }
+              />
 
-              </select>
+              <SelectField
+                label="Payment Method"
+                name="paymentMethod"
+                value={
+                  manualExpense.paymentMethod
+                }
+                options={
+                  paymentMethods
+                }
+                onChange={
+                  handleManualExpenseChange
+                }
+              />
 
             </div>
-
-          </div>
-
-          <button
-            type="submit"
-            className="btn btn-primary mt-4"
-          >
-
-            <Plus
-              size={17}
-              className="me-2"
-            />
-
-            Add Expense
-
-          </button>
-
-        </form>
-
-      </div>
-
-      {/* CATEGORY BREAKDOWN */}
-
-      <div className="row g-4 mb-4">
-
-        <div className="col-lg-8">
-
-          <div className="dashboard-card p-4">
-
-            <h5 className="mb-4">
-              Category Breakdown
-            </h5>
-
-            {categoryChartData.length >
-            0 ? (
-              categoryChartData.map(
-                (item, index) => {
-
-                  const name =
-                    item.name ||
-                    "Other";
-
-                  const amount =
-                    Number(
-                      item.value || 0
-                    );
-
-                  return (
-                    <div
-                      key={name}
-                      className="mb-3"
-                    >
-
-                      <div className="d-flex justify-content-between mb-1">
-
-                        <span>
-                          {name}
-                        </span>
-
-                        <strong>
-                          {formatCurrency(
-                            amount
-                          )}
-                        </strong>
-
-                      </div>
-
-                      <div className="progress">
-
-                        <div
-                          className="progress-bar"
-                          style={{
-                            width: `${
-                              dashboard.totalExpenses
-                                ? Math.min(
-                                    (amount /
-                                      dashboard.totalExpenses) *
-                                      100,
-                                    100
-                                  )
-                                : 0
-                            }%`,
-
-                            backgroundColor:
-                              categoryColors[
-                                name
-                              ] ||
-                              chartColors[
-                                index %
-                                  chartColors.length
-                              ],
-                          }}
-                        />
-
-                      </div>
-
-                    </div>
-                  );
-                }
-              )
-            ) : (
-              <div className="text-center text-muted py-4">
-                No category data
-              </div>
-            )}
-
-          </div>
-
-        </div>
-
-        {/* HIGHEST EXPENSE */}
-
-        <div className="col-lg-4">
-
-          <div className="dashboard-card p-4 h-100">
-
-            <h5 className="mb-4">
-              Highest Expense
-            </h5>
-
-            {dashboard.highestExpense ? (
-              <>
-
-                <Receipt
-                  size={40}
-                  className="mb-3"
-                />
-
-                <h5>
-                  {
-                    dashboard
-                      .highestExpense
-                      .itemName
-                  }
-                </h5>
-
-                <h3>
-                  {formatCurrency(
-                    dashboard
-                      .highestExpense
-                      .amount
-                  )}
-                </h3>
-
-                <p className="text-muted mb-0">
-                  {
-                    dashboard
-                      .highestExpense
-                      .category
-                  }
-                </p>
-
-              </>
-            ) : (
-              <div className="text-muted">
-                No expenses yet
-              </div>
-            )}
-
-          </div>
-
-        </div>
-
-      </div>
-
-      {/* EDIT EXPENSE */}
-
-      {editingExpense && (
-        <div className="dashboard-card p-4 mb-4">
-
-          <div className="d-flex justify-content-between align-items-center mb-4">
-
-            <h4 className="mb-0">
-              Edit Expense
-            </h4>
 
             <button
-              type="button"
-              className="btn btn-sm btn-secondary"
-              onClick={() =>
-                setEditingExpense(null)
-              }
+              type="submit"
+              disabled={loading}
+              className="mt-5 flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
             >
-              Cancel
+              <Plus size={17} />
+
+              {loading
+                ? "Adding..."
+                : "Add Expense"}
             </button>
 
+          </form>
+
+        </div>
+
+        {/* EDIT */}
+
+        {editingExpense && (
+          <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm">
+
+            <div className="mb-5 flex justify-between">
+
+              <div>
+                <h2 className="text-lg font-bold">
+                  Edit Expense
+                </h2>
+
+                <p className="text-sm text-slate-500">
+                  Update expense details
+                </p>
+              </div>
+
+              <button
+                onClick={() =>
+                  setEditingExpense(
+                    null
+                  )
+                }
+                className="rounded-lg border px-3 py-2 text-sm"
+              >
+                Cancel
+              </button>
+
+            </div>
+
+            <form
+              onSubmit={
+                handleUpdateExpense
+              }
+            >
+
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+
+                <InputField
+                  label="Date"
+                  type="date"
+                  name="date"
+                  value={
+                    editExpenseData.date
+                  }
+                  onChange={
+                    handleEditChange
+                  }
+                />
+
+                <InputField
+                  label="Item Name"
+                  name="itemName"
+                  value={
+                    editExpenseData.itemName
+                  }
+                  onChange={
+                    handleEditChange
+                  }
+                />
+
+                <InputField
+                  label="Amount"
+                  type="number"
+                  name="amount"
+                  value={
+                    editExpenseData.amount
+                  }
+                  onChange={
+                    handleEditChange
+                  }
+                />
+
+                <InputField
+                  label="Quantity"
+                  type="number"
+                  min="1"
+                  name="quantity"
+                  value={
+                    editExpenseData.quantity
+                  }
+                  onChange={
+                    handleEditChange
+                  }
+                />
+
+                <InputField
+                  label="Vendor"
+                  name="vendor"
+                  value={
+                    editExpenseData.vendor
+                  }
+                  onChange={
+                    handleEditChange
+                  }
+                />
+
+                <SelectField
+                  label="Category"
+                  name="category"
+                  value={
+                    editExpenseData.category
+                  }
+                  options={categories}
+                  onChange={
+                    handleEditChange
+                  }
+                />
+
+                <SelectField
+                  label="Payment Method"
+                  name="paymentMethod"
+                  value={
+                    editExpenseData.paymentMethod
+                  }
+                  options={
+                    paymentMethods
+                  }
+                  onChange={
+                    handleEditChange
+                  }
+                />
+
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                className="mt-5 flex items-center gap-2 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-700"
+              >
+                <Save size={17} />
+                Update Expense
+              </button>
+
+            </form>
+
           </div>
+        )}
 
-          <div className="row g-3">
+        {/* ALL EXPENSES */}
 
-            <div className="col-md-6">
+        <div className="rounded-2xl bg-white p-5 shadow-sm">
 
-              <label className="form-label">
-                Date
-              </label>
+          <div className="mb-5 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
 
-              <input
-                type="date"
-                className="form-control"
-                value={
-                  editExpenseData.date
-                }
-                onChange={(e) =>
-                  setEditExpenseData(
-                    (prev) => ({
-                      ...prev,
-                      date:
-                        e.target.value,
-                    })
-                  )
-                }
-              />
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">
+                All Expenses
+              </h2>
 
+              <p className="text-sm text-slate-500">
+                Search and manage your expenses
+              </p>
             </div>
 
-            <div className="col-md-6">
+            <div className="flex flex-col gap-2 sm:flex-row">
 
-              <label className="form-label">
-                Item Name
-              </label>
+              <div className="flex">
 
-              <input
-                type="text"
-                className="form-control"
-                value={
-                  editExpenseData.itemName
-                }
-                onChange={(e) =>
-                  setEditExpenseData(
-                    (prev) => ({
-                      ...prev,
-                      itemName:
-                        e.target.value,
-                    })
-                  )
-                }
-              />
+                <div className="flex items-center rounded-l-lg border border-r-0 border-slate-300 bg-slate-50 px-3">
+                  <Search
+                    size={17}
+                    className="text-slate-500"
+                  />
+                </div>
 
-            </div>
+                <input
+                  type="text"
+                  placeholder="Search..."
+                  value={searchTerm}
+                  onChange={(e) =>
+                    setSearchTerm(
+                      e.target.value
+                    )
+                  }
+                  className="rounded-r-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-blue-500"
+                />
 
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Amount
-              </label>
-
-              <input
-                type="number"
-                className="form-control"
-                value={
-                  editExpenseData.amount
-                }
-                onChange={(e) =>
-                  setEditExpenseData(
-                    (prev) => ({
-                      ...prev,
-                      amount:
-                        e.target.value,
-                    })
-                  )
-                }
-              />
-
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Quantity
-              </label>
-
-              <input
-                type="number"
-                min="1"
-                className="form-control"
-                value={
-                  editExpenseData.quantity
-                }
-                onChange={(e) =>
-                  setEditExpenseData(
-                    (prev) => ({
-                      ...prev,
-                      quantity:
-                        e.target.value,
-                    })
-                  )
-                }
-              />
-
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Vendor
-              </label>
-
-              <input
-                type="text"
-                className="form-control"
-                value={
-                  editExpenseData.vendor
-                }
-                onChange={(e) =>
-                  setEditExpenseData(
-                    (prev) => ({
-                      ...prev,
-                      vendor:
-                        e.target.value,
-                    })
-                  )
-                }
-              />
-
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Category
-              </label>
+              </div>
 
               <select
-                className="form-select"
-                value={
-                  editExpenseData.category
-                }
+                value={filterCategory}
                 onChange={(e) =>
-                  setEditExpenseData(
-                    (prev) => ({
-                      ...prev,
-                      category:
-                        e.target.value,
-                    })
+                  setFilterCategory(
+                    e.target.value
                   )
                 }
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none"
               >
+                <option value="All">
+                  All Categories
+                </option>
 
                 {categories.map(
                   (category) => (
@@ -3379,340 +2626,175 @@ const Dashboard = () => {
                     </option>
                   )
                 )}
-
-              </select>
-
-            </div>
-
-            <div className="col-md-6">
-
-              <label className="form-label">
-                Payment Method
-              </label>
-
-              <select
-                className="form-select"
-                value={
-                  editExpenseData.paymentMethod
-                }
-                onChange={(e) =>
-                  setEditExpenseData(
-                    (prev) => ({
-                      ...prev,
-                      paymentMethod:
-                        e.target.value,
-                    })
-                  )
-                }
-              >
-
-                {paymentMethods.map(
-                  (method) => (
-                    <option
-                      key={method}
-                      value={method}
-                    >
-                      {method}
-                    </option>
-                  )
-                )}
-
               </select>
 
             </div>
 
           </div>
 
-          <button
-            type="button"
-            className="btn btn-success mt-4"
-            onClick={
-              handleUpdateExpense
-            }
-          >
+          {filteredExpenses.length >
+          0 ? (
+            <div className="overflow-x-auto">
 
-            <Save
-              size={17}
-              className="me-2"
-            />
+              <table className="w-full min-w-[850px] text-left text-sm">
 
-            Update Expense
+                <thead>
+                  <tr className="border-b bg-slate-50 text-xs uppercase text-slate-500">
 
-          </button>
+                    <th className="px-4 py-3">
+                      Date
+                    </th>
 
-        </div>
-      )}
+                    <th className="px-4 py-3">
+                      Item
+                    </th>
 
-      {/* ALL EXPENSES */}
+                    <th className="px-4 py-3">
+                      Vendor
+                    </th>
 
-      <div className="dashboard-card p-4 mb-4">
+                    <th className="px-4 py-3">
+                      Category
+                    </th>
 
-        <div className="d-flex justify-content-between align-items-center mb-4">
+                    <th className="px-4 py-3">
+                      Payment
+                    </th>
 
-          <h4 className="mb-0">
-            All Expenses
-          </h4>
+                    <th className="px-4 py-3">
+                      Qty
+                    </th>
 
-          <span className="badge bg-primary">
-            {filteredExpenses.length}
-          </span>
+                    <th className="px-4 py-3">
+                      Amount
+                    </th>
 
-        </div>
+                    <th className="px-4 py-3">
+                      Action
+                    </th>
 
-        {/* SEARCH */}
+                  </tr>
+                </thead>
 
-        <div className="row g-3 mb-4">
+                <tbody>
 
-          <div className="col-md-8">
+                  {filteredExpenses.map(
+                    (expense) => (
+                      <tr
+                        key={
+                          expense._id ||
+                          expense.id
+                        }
+                        className="border-b last:border-0 hover:bg-slate-50"
+                      >
 
-            <div className="input-group">
+                        <td className="px-4 py-3 text-slate-500">
+                          {normalizeDate(
+                            expense.date
+                          )}
+                        </td>
 
-              <span className="input-group-text">
-                <Search size={18} />
-              </span>
-
-              <input
-                type="text"
-                className="form-control"
-                placeholder="Search item or vendor..."
-                value={searchTerm}
-                onChange={(e) =>
-                  setSearchTerm(
-                    e.target.value
-                  )
-                }
-              />
-
-            </div>
-
-          </div>
-
-          <div className="col-md-4">
-
-            <select
-              className="form-select"
-              value={filterCategory}
-              onChange={(e) =>
-                setFilterCategory(
-                  e.target.value
-                )
-              }
-            >
-
-              <option value="All">
-                All Categories
-              </option>
-
-              {categories.map(
-                (category) => (
-                  <option
-                    key={category}
-                    value={category}
-                  >
-                    {category}
-                  </option>
-                )
-              )}
-
-            </select>
-
-          </div>
-
-        </div>
-
-        {/* TABLE */}
-
-        {filteredExpenses.length >
-        0 ? (
-          <div className="table-responsive">
-
-            <table className="table table-hover align-middle">
-
-              <thead>
-
-                <tr>
-                  <th>Date</th>
-                  <th>Item</th>
-                  <th>Vendor</th>
-                  <th>Category</th>
-                  <th>Payment Method</th>
-                  <th>Qty</th>
-                  <th>Amount</th>
-                  <th>Actions</th>
-                </tr>
-
-              </thead>
-
-              <tbody>
-
-                {filteredExpenses.map(
-                  (expense) => (
-                    <tr
-                      key={
-                        expense._id ||
-                        expense.id
-                      }
-                    >
-
-                      <td>
-                        {normalizeDate(
-                          expense.date
-                        )}
-                      </td>
-
-                      <td>
-                        <strong>
+                        <td className="px-4 py-3 font-medium">
                           {
                             expense.itemName
                           }
-                        </strong>
-                      </td>
+                        </td>
 
-                      <td>
-                        {expense.vendor ||
-                          "-"}
-                      </td>
+                        <td className="px-4 py-3">
+                          {expense.vendor ||
+                            "-"}
+                        </td>
 
-                      <td>
-                        <span className="badge bg-light text-dark">
-                          {
-                            expense.category ||
-                            "Other"
-                          }
-                        </span>
-                      </td>
+                        <td className="px-4 py-3">
+                          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs">
+                            {expense.category ||
+                              "Other"}
+                          </span>
+                        </td>
 
-                      <td>
-
-                        <span
-                          className={`badge ${
-                            expense.paymentMethod ===
-                            "UPI"
-                              ? "bg-primary"
-                              : expense.paymentMethod ===
-                                "Cash"
-                              ? "bg-success"
-                              : expense.paymentMethod ===
-                                "Credit Card"
-                              ? "bg-warning text-dark"
-                              : expense.paymentMethod ===
-                                "Debit Card"
-                              ? "bg-info text-dark"
-                              : expense.paymentMethod ===
-                                "Bank Transfer"
-                              ? "bg-secondary"
-                              : "bg-light text-dark"
-                          }`}
-                        >
+                        <td className="px-4 py-3">
                           {expense.paymentMethod ||
                             "Other"}
-                        </span>
+                        </td>
 
-                      </td>
+                        <td className="px-4 py-3">
+                          {expense.quantity ||
+                            1}
+                        </td>
 
-                      <td>
-                        {
-                          expense.quantity ||
-                          1
-                        }
-                      </td>
-
-                      <td>
-                        <strong>
+                        <td className="px-4 py-3 font-semibold">
                           {formatCurrency(
                             expense.amount
                           )}
-                        </strong>
-                      </td>
+                        </td>
 
-                      <td>
+                        <td className="px-4 py-3">
 
-                        <div className="d-flex gap-2">
+                          <div className="flex gap-2">
 
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-primary"
-                            onClick={() =>
-                              handleEditExpense(
-                                expense
-                              )
-                            }
-                          >
-                            <Pencil
-                              size={15}
-                            />
-                          </button>
+                            <button
+                              onClick={() =>
+                                handleStartEdit(
+                                  expense
+                                )
+                              }
+                              className="rounded-lg border border-blue-200 p-2 text-blue-600 hover:bg-blue-50"
+                            >
+                              <Pencil
+                                size={15}
+                              />
+                            </button>
 
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-outline-danger"
-                            onClick={() =>
-                              handleDeleteExpense(
-                                expense._id ||
-                                  expense.id
-                              )
-                            }
-                          >
-                            <Trash2
-                              size={15}
-                            />
-                          </button>
+                            <button
+                              onClick={() =>
+                                handleDeleteExpense(
+                                  expense._id ||
+                                    expense.id
+                                )
+                              }
+                              className="rounded-lg border border-red-200 p-2 text-red-600 hover:bg-red-50"
+                            >
+                              <Trash2
+                                size={15}
+                              />
+                            </button>
 
-                        </div>
+                          </div>
 
-                      </td>
+                        </td>
 
-                    </tr>
-                  )
-                )}
+                      </tr>
+                    )
+                  )}
 
-              </tbody>
+                </tbody>
 
-            </table>
+              </table>
 
-          </div>
-        ) : (
-          <div className="text-center py-5">
+            </div>
+          ) : (
+            <EmptyState text="No expenses found" />
+          )}
 
-            <Receipt
-              size={45}
-              className="text-muted mb-3"
-            />
-
-            <h5>
-              No expenses found
-            </h5>
-
-            <p className="text-muted mb-0">
-              Add an expense to see it here.
-            </p>
-
-          </div>
-        )}
+        </div>
 
       </div>
 
       {/* LOADING */}
 
       {loading && (
-        <div
-          className="position-fixed top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center"
-          style={{
-            background:
-              "rgba(0,0,0,0.35)",
-            zIndex: 9999,
-          }}
-        >
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/60 backdrop-blur-sm">
 
-          <div className="bg-white rounded p-4 shadow text-center">
+          <div className="rounded-xl bg-white px-6 py-4 shadow-lg">
 
-            <div
-              className="spinner-border mb-3"
-              role="status"
-            />
+            <div className="flex items-center gap-3">
 
-            <div>
-              Loading...
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+
+              <span className="text-sm font-medium text-slate-700">
+                Updating dashboard...
+              </span>
+
             </div>
 
           </div>
@@ -3720,6 +2802,226 @@ const Dashboard = () => {
         </div>
       )}
 
+    </div>
+  );
+};
+
+/* =====================================================
+   SMALL COMPONENTS
+===================================================== */
+
+const InputField = ({
+  label,
+  ...props
+}) => {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-slate-700">
+        {label}
+      </label>
+
+      <input
+        {...props}
+        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+      />
+    </div>
+  );
+};
+
+const SelectField = ({
+  label,
+  options,
+  ...props
+}) => {
+  return (
+    <div>
+      <label className="mb-1.5 block text-sm font-medium text-slate-700">
+        {label}
+      </label>
+
+      <select
+        {...props}
+        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-blue-500"
+      >
+        {options.map((option) => (
+          <option
+            key={option}
+            value={option}
+          >
+            {option}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+};
+
+const SummaryCard = ({
+  title,
+  value,
+  icon,
+  danger = false,
+}) => {
+  return (
+    <div className="rounded-2xl bg-white p-5 shadow-sm">
+
+      <div className="flex items-center justify-between">
+
+        <div>
+          <p className="text-sm text-slate-500">
+            {title}
+          </p>
+
+          <p
+            className={`mt-2 text-2xl font-bold ${
+              danger
+                ? "text-red-600"
+                : "text-slate-900"
+            }`}
+          >
+            {formatCurrency(value)}
+          </p>
+        </div>
+
+        <div className="rounded-xl bg-slate-100 p-3 text-slate-600">
+          {icon}
+        </div>
+
+      </div>
+
+    </div>
+  );
+};
+
+const BudgetCard = ({
+  title,
+  value,
+  danger = false,
+}) => {
+  return (
+    <div className="rounded-xl border p-4">
+
+      <p className="text-sm text-slate-500">
+        {title}
+      </p>
+
+      <p
+        className={`mt-2 text-xl font-bold ${
+          danger
+            ? "text-red-600"
+            : "text-slate-900"
+        }`}
+      >
+        {formatCurrency(value)}
+      </p>
+
+    </div>
+  );
+};
+
+const ReportCard = ({
+  title,
+  value,
+  danger = false,
+  currency = true,
+}) => {
+  return (
+    <div className="rounded-xl border p-4">
+
+      <p className="text-sm text-slate-500">
+        {title}
+      </p>
+
+      <p
+        className={`mt-2 text-xl font-bold ${
+          danger
+            ? "text-red-600"
+            : "text-slate-900"
+        }`}
+      >
+        {currency
+          ? formatCurrency(value)
+          : value}
+      </p>
+
+    </div>
+  );
+};
+
+const ChartCard = ({
+  title,
+  data,
+  colors,
+  fallbackColors,
+}) => {
+  return (
+    <div className="rounded-2xl bg-white p-5 shadow-sm">
+
+      <h2 className="mb-5 text-lg font-bold text-slate-900">
+        {title}
+      </h2>
+
+      {data.length > 0 ? (
+        <div className="h-80 w-full">
+
+          <ResponsiveContainer>
+            <PieChart>
+
+              <Pie
+                data={data}
+                dataKey="value"
+                nameKey="name"
+                cx="50%"
+                cy="50%"
+                outerRadius={105}
+                label
+              >
+
+                {data.map(
+                  (entry, index) => (
+                    <Cell
+                      key={`${entry.name}-${index}`}
+                      fill={
+                        colors[
+                          entry.name
+                        ] ||
+                        fallbackColors[
+                          index %
+                            fallbackColors.length
+                        ]
+                      }
+                    />
+                  )
+                )}
+
+              </Pie>
+
+              <Tooltip
+                formatter={(value) =>
+                  formatCurrency(
+                    value
+                  )
+                }
+              />
+
+              <Legend />
+
+            </PieChart>
+          </ResponsiveContainer>
+
+        </div>
+      ) : (
+        <EmptyState text="No expense data" />
+      )}
+
+    </div>
+  );
+};
+
+const EmptyState = ({ text }) => {
+  return (
+    <div className="flex min-h-32 items-center justify-center text-sm text-slate-400">
+      {text}
     </div>
   );
 };
