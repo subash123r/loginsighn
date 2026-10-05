@@ -1,16 +1,24 @@
+
 import axios from "axios";
 
-const API_URL = "http://localhost:3000/api/receipt";
+const API_URL = import.meta.env.VITE_API_URL;
 
+// ===============================
+// SCAN RECEIPT
+// ===============================
 export const scanReceipt = async (file) => {
   const token = localStorage.getItem("token");
+
+  if (!file) {
+    throw new Error("Receipt file is required");
+  }
 
   const formData = new FormData();
 
   formData.append("receipt", file);
 
   const response = await axios.post(
-    `${API_URL}/scan`,
+    `${API_URL}/api/receipt/scan`,
     formData,
     {
       headers: {
@@ -22,11 +30,14 @@ export const scanReceipt = async (file) => {
   return response.data;
 };
 
+// ===============================
+// UPDATE EXPENSE
+// ===============================
 export const updateExpense = async (expenseId, expenseData) => {
   const token = localStorage.getItem("token");
 
   const response = await axios.put(
-    `http://localhost:3000/api/expenses/${expenseId}`,
+    `${API_URL}/api/expenses/${expenseId}`,
     expenseData,
     {
       headers: {
@@ -38,3 +49,4 @@ export const updateExpense = async (expenseId, expenseData) => {
 
   return response.data;
 };
+

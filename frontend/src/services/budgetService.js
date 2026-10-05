@@ -1,6 +1,7 @@
+
 import axios from "axios";
 
-const API_URL = "http://localhost:3000/api/budget";
+const API_URL = import.meta.env.VITE_API_URL;
 
 const getAuthConfig = () => {
   const token = localStorage.getItem("token");
@@ -15,7 +16,7 @@ const getAuthConfig = () => {
 // Save / Update Budget
 export const saveBudget = async (budgetData) => {
   const response = await axios.post(
-    API_URL,
+    `${API_URL}/api/budget`,
     budgetData,
     getAuthConfig()
   );
@@ -26,7 +27,7 @@ export const saveBudget = async (budgetData) => {
 // Get Budget
 export const getBudget = async (month) => {
   const response = await axios.get(
-    `${API_URL}?month=${month}`,
+    `${API_URL}/api/budget?month=${month}`,
     getAuthConfig()
   );
 
@@ -36,9 +37,10 @@ export const getBudget = async (month) => {
 // Delete Budget
 export const deleteBudget = async (month) => {
   const response = await axios.delete(
-    `${API_URL}?month=${month}`,
+    `${API_URL}/api/budget?month=${month}`,
     getAuthConfig()
   );
 
   return response.data;
 };
+
